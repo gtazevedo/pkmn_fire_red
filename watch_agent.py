@@ -22,6 +22,10 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 from src.env import PokemonEnv
 from src.config import CFG, ActionSpace
+from src.progress import ProgressManager
+
+# MONKEYPATCH: Força o visualizador a sempre iniciar no melhor milestone salvo (ex: Viridian City)
+ProgressManager.current_state_file = property(lambda self: self._best_state_file)
 
 def main():
     print("=== Inicializando o Visualizador do Agente ===")
@@ -70,15 +74,10 @@ def main():
     print("Controles na janela do Pygame:")
     print("  - ESC ou fechar janela: Sair")
     
-    # Força o visualizador a sempre iniciar no melhor milestone salvo (ex: Viridian City)
+    # Log informando o marco salvo carregado pelo monkeypatch
     raw_env = venv.envs[0]
     if raw_env._progress._best_milestone_idx >= 0:
         print(f"\n[Visualizador] Forçando inicialização no melhor marco salvo: {raw_env._progress._best_state_file}\n")
-        import types
-        raw_env._progress.current_state_file = types.MethodType(
-            lambda self: self._best_state_file, 
-            raw_env._progress
-        )
 
     obs = venv.reset()
     
