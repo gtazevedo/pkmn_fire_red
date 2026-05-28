@@ -1,0 +1,36 @@
+{
+  "info": {
+    "p1_hp": {
+      "address": 33702538,
+      "type": "<u2"
+    },
+    "p1_level": {
+      "address": 33702628,
+      "type": "|u1"
+    },
+    "player_x": {
+      "address": 33779256,
+      "type": "<u2"
+    },
+    "player_y": {
+      "address": 33779260,
+      "type": "<u2"
+    },
+    "is_moving": {
+      "address": 33779835,
+      "type": "|u1"
+    },
+    "map_id": {
+      "address": 33758653,
+      "type": "|u1"
+    },
+    "enemy_hp": {
+      "address": 33701938,
+      "type": "<u2"
+    },
+    "screen_fading": {
+      "address": 50335644,
+      "type": "|u1"
+    }
+  }
+}

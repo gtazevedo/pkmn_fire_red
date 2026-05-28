@@ -1,0 +1,34 @@
+{
+  "info": {
+    "map_id": {
+      "address": 33758653,
+      "type": "|u1"
+    },
+    "map_bank": {
+      "address": 33758652,
+      "type": "|u1"
+    },
+    "is_dpad_pressed": {
+      "address": 33779834,
+      "type": "|u1"
+    },
+    "is_moving": {
+      "address": 33779835,
+      "type": "|u1"
+    },
+    "player_x": {
+      "address": 50352136, 
+      "type": "<u2",
+      "pointer": 0
+    },
+    "player_y": {
+      "address": 50352136, 
+      "type": "<u2",
+      "pointer": 2
+    },
+    "battle_type": {
+      "address": 33785516,
+      "type": "<u2"
+    }
+  }
+}

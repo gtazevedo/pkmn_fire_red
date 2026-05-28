@@ -205,3 +205,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Pokémon RL Custom Ignored Files
+*.gba
+pokemon_lstm_model*
+steps_state.txt
+checkpoints/
+progress_states/
+whiteout_frames/
+pokemon_tensorboard/
+*.log

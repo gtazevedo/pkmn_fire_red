@@ -1,0 +1,23 @@
+{
+  "done": {
+    "variables": {
+      "p1_hp": { "op": "equal", "reference": 0 }
+    }
+  },
+  "reward": {
+    "variables": {
+      "p1_lvl": { "reward": 100.0 },
+      "p2_lvl": { "reward": 100.0 },
+      "p3_lvl": { "reward": 100.0 },
+      "p4_lvl": { "reward": 100.0 },
+      "p5_lvl": { "reward": 100.0 },
+      "p6_lvl": { "reward": 100.0 },
+      "e1_hp": { "op": "negative", "reward": 2.0 },
+      "e2_hp": { "op": "negative", "reward": 2.0 },
+      "e3_hp": { "op": "negative", "reward": 2.0 },
+      "e4_hp": { "op": "negative", "reward": 2.0 },
+      "e5_hp": { "op": "negative", "reward": 2.0 },
+      "e6_hp": { "op": "negative", "reward": 2.0 }
+    }
+  }
+}
