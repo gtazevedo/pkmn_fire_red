@@ -70,6 +70,16 @@ def main():
     print("Controles na janela do Pygame:")
     print("  - ESC ou fechar janela: Sair")
     
+    # Força o visualizador a sempre iniciar no melhor milestone salvo (ex: Viridian City)
+    raw_env = venv.envs[0]
+    if raw_env._progress._best_milestone_idx >= 0:
+        print(f"\n[Visualizador] Forçando inicialização no melhor marco salvo: {raw_env._progress._best_state_file}\n")
+        import types
+        raw_env._progress.current_state_file = types.MethodType(
+            lambda self: self._best_state_file, 
+            raw_env._progress
+        )
+
     obs = venv.reset()
     
     # Estados iniciais da memória LSTM do modelo recorrente
