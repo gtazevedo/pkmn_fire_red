@@ -152,6 +152,7 @@ class PokemonEnv(gym.Env):
                 )
 
         state_file = self._progress.current_state_file
+        log.info(f"[Env {self.env_id}] Loading GBA state file: {state_file}")
         with open(state_file, "rb") as f:
             self.env.em.set_state(f.read())
 
