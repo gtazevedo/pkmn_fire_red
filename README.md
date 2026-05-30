@@ -19,9 +19,13 @@ pkmn_fire_red/
 │   ├── env.py                # Wrapper Gymnasium em torno do stable-retro (PokemonEnv)
 │   └── callbacks.py          # Monitor de TensorBoard e motor de treinamento (Trainer)
 │
-├── tools/                    # Scripts auxiliares e ferramentas de diagnóstico
-│   ├── mine_flags.py         # Extrator de offsets para a matriz de Eventos
-│   ├── save_state.py         # Interface interativa para salvar save states personalizados
+├── research/                 # Scripts de mineração e descoberta (mantidos fora de prod)
+│   ├── mine_flags.py         # Extrator de offsets absolutos da SaveBlock1
+│   ├── probe_ram.py          # Rastreador de deltas de RAM
+│   └── global_pret.h         # Header C original de referência do Pokémon
+│
+├── tools/                    # Ferramentas auxiliares e de diagnóstico
+│   ├── save_state.py         # Interface interativa para salvar save states
 │   └── text_advisor.py       # Histórico da tentativa de OCR antiga (Tesseract)
 │
 ├── checkpoints/              # Pasta para backups automáticos de modelos

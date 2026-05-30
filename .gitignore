@@ -215,3 +215,4 @@ progress_states/
 whiteout_frames/
 pokemon_tensorboard/
 *.log
+red_gym_env_pwhiddy.py
