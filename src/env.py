@@ -42,9 +42,15 @@ class PokemonEnv(gym.Env):
         # Propaga para _stats imediatamente (antes do primeiro reset)
         self._stats._farm_ratio_threshold = self._farm_ratio_threshold
 
-        # [FIX v15-Stairs] Controle de loop de escadas/transição de mapa
-        self._last_map_key_stairs = None
+        # [FIX v15-Stairs] Controle de loop de escadas/transição de mapa (A -> B -> A)
+        self._map_history = []
         self._last_map_transition_step = 0
+
+        # [FIX v17] Rastreamento de incentivos positivos
+        self._explore_reward_per_map: dict = {}   # cap diferenciado por mapa
+        self._prev_map_key: tuple = ()            # para detectar transições
+        self._ever_left_interior: bool = False    # para early termination interior-only
+        self._steps_interior_only: int = 0        # contador de steps só em bank=4
 
     @property
     def max_steps(self) -> int:
@@ -142,6 +148,9 @@ class PokemonEnv(gym.Env):
             CFG.farm_ratio_threshold_min,
             CFG.farm_ratio_threshold_max,
         )
+        
+        self._map_history.clear()
+        self._last_map_transition_step = 0
 
         # [FIX v11-G] Decay mais agressivo: 0.97→0.80
         if CFG.persistent_visits_decay < 1.0 and self._stats.persistent_tile_visits:
@@ -180,8 +189,14 @@ class PokemonEnv(gym.Env):
         self._last_raw_frame = raw_frame
 
         # [FIX v15-Stairs] Reset do controle de loop
-        self._last_map_key_stairs = None
+        self._map_history.clear()
         self._last_map_transition_step = 0
+
+        # [FIX v17] Reset incentivos positivos
+        self._explore_reward_per_map  = {}
+        self._prev_map_key            = ()
+        self._ever_left_interior      = False
+        self._steps_interior_only     = 0
 
         log.debug(
             f"[Env {self.env_id}] Reset ep={self._episode_num} — "
@@ -208,29 +223,65 @@ class PokemonEnv(gym.Env):
         text_bonus      = self._advisor.update(_in_battle_now, _script_lock, action_idx, ram_array)
         step_reward    += self._rewards.add("text", text_bonus)
 
-        x        = RamReader.coord(info, "player_x")
-        y        = RamReader.coord(info, "player_y")
+        x        = RamReader.coord(info, "player_x", ram_array)
+        y        = RamReader.coord(info, "player_y", ram_array)
         map_id   = RamReader.map_id(info)
         map_bank = RamReader.map_bank(info)
         tile     = (map_bank, map_id, x, y)
         map_key  = (map_bank, map_id)
 
-        # [FIX v15-Stairs] Detecção de loop de transição de mapas (ex: subir/descer escadas)
-        if map_key != self._last_map_key_stairs:
-            # Evita penalizar a primeiríssima transição pós-reset
-            if self._last_map_key_stairs is not None:
+        # [FIX v15-Stairs] Detecção de loop de transição de mapas (A -> B -> A)
+        # Se o mapa mudou em relação ao último mapa registrado
+        if not self._map_history or map_key != self._map_history[-1]:
+            # Se já temos histórico e voltamos para o mapa de antes do último (A -> B -> A)
+            if len(self._map_history) >= 2 and map_key == self._map_history[-2]:
                 steps_since_transition = self._stats.steps - self._last_map_transition_step
-                if steps_since_transition < 100:
+                if steps_since_transition < 150:
                     penalty = -3.0
                     step_reward += self._rewards.add("stuck", penalty)
-                    log.info(f"[Env {self.env_id}] 🚨 STAIRS/MAP LOOP DETECTED! Penalty {penalty:.1f} applied.")
-            self._last_map_key_stairs = map_key
+                    log.info(f"[Env {self.env_id}] 🚨 STAIRS/MAP LOOP DETECTED (A->B->A)! Penalty {penalty:.1f} applied.")
+            
+            # Adiciona ao histórico e mantém limite de tamanho 3
+            self._map_history.append(map_key)
+            if len(self._map_history) > 3:
+                self._map_history.pop(0)
+                
             self._last_map_transition_step = self._stats.steps
 
         # Não recompensa exploração durante batalha (evita reward espúrio de teleporte pós-batalha)
         if not _in_battle_now:
+
+            is_interior = (map_bank == 4)
+
+            # [FIX v17-A] Early termination se nunca saiu de mapas interiores
+            if is_interior:
+                self._steps_interior_only += 1
+                # [FIX v18] Penalidade calibrada para forçar saída (-0.005/step)
+                step_reward += self._rewards.add("stuck", CFG.indoor_step_penalty)
+            else:
+                self._ever_left_interior   = True
+                self._steps_interior_only  = 0
+
+            # [FIX v17-B] Outdoor sustain bonus: incentivo positivo por estar lá fora
+            if not is_interior:
+                step_reward += self._rewards.add("milestone", CFG.outdoor_sustain_bonus)
+
             explore_r, is_new_map = self._stats.update_exploration(tile, map_key)
+
+            # [FIX v17-C] Cap diferenciado: interior esgota rápido, exterior é abundante
+            cap = CFG.map_explore_cap_interior if is_interior else CFG.map_explore_cap_exterior
+            already_earned = self._explore_reward_per_map.get(map_key, 0.0)
+            if already_earned >= cap:
+                explore_r = 0.0
+            else:
+                explore_r = min(explore_r, cap - already_earned)
+                self._explore_reward_per_map[map_key] = already_earned + explore_r
+
             step_reward += self._rewards.add("explore", explore_r)
+            
+            if is_new_map:
+                # Reset y_min_episode to current y so we don't get a massive north bonus just by changing map
+                self._stats.y_min_episode = y
 
             # North bonus: y decresce ao ir para norte no FireRed
             if y < self._stats.y_min_episode:
@@ -247,7 +298,7 @@ class PokemonEnv(gym.Env):
             log.info(f"[Env {self.env_id}] New map: bank={map_key[0]} id={map_key[1]}")
             ms_bonus = self._progress.check_and_save(
                 self.env, map_bank, map_id,
-                RamReader.badges(info), self.env_id
+                RamReader.badges(info), RamReader.party_level(info), self.env_id
             )
             if ms_bonus > 0:
                 step_reward += self._rewards.add("milestone", ms_bonus)
@@ -330,8 +381,19 @@ class PokemonEnv(gym.Env):
         over_limit = self._stats.steps >= ms
         hard_cap   = self._stats.steps >= int(ms * 1.1)
 
+        # [FIX v17-A] Early termination: se agente nunca saiu de bank=4 e já passou
+        # o threshold, encerra o episódio sem penalidade extra. Episódio curto = poucos
+        # pontos. Episódio lá fora = longo e lucrativo. Cria diferença de oportunidade.
+        interior_only_terminate = (
+            not self._ever_left_interior and
+            not _in_battle_now and
+            self._steps_interior_only >= CFG.interior_only_terminate_steps
+        )
+        if interior_only_terminate:
+            log.debug(f"[Env {self.env_id}] Interior-only early termination at step {self._stats.steps}")
+
         in_post_battle_grace = self._stats.post_battle_grace_remaining > 0
-        done = (hard_cap or farm_terminate or
+        done = (hard_cap or farm_terminate or interior_only_terminate or
                 (over_limit and not _in_battle_now and not in_post_battle_grace))
 
         obs_dict = self._build_obs(raw_frame, info)

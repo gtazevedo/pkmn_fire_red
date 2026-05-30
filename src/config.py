@@ -16,6 +16,10 @@ class Config:
         os.path.dirname(retro.__file__),
         "data", "stable", "PokemonFireRed", "Start.state.gz",
     )
+    # [FIX v18] Save state exterior: ponto de partida alternativo já fora da casa
+    pallet_exterior_state_file: str = "./progress_states/pallet_exterior.state"
+    # Probabilidade de iniciar do exterior (quando o state existir)
+    exterior_start_ratio: float = 0.60
     model_path:          str = "pokemon_lstm_model"
     checkpoint_dir:      str = "./checkpoints/"
     progress_dir:        str = "./progress_states/"
@@ -23,8 +27,8 @@ class Config:
     log_file:            str = "./pokemon_training.log"
     whiteout_frame_dir:  str = "./whiteout_frames/"
 
-    # [FIX v14] config_stamp bumped — RAM_SIZE=20, VecNormalize, first_strike_bonus
-    config_stamp:        str = "v14_bugfix_vecnorm"
+    # [FIX v18] config_stamp bumped — exterior save state + calibrated indoor penalty
+    config_stamp:        str = "v18_exterior_state"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
@@ -118,7 +122,7 @@ class Config:
     # [FIX v15] Whiteout penalty reduzido para flat, escala super suave.
     # Evita que o agente sinta pavor de ser derrotado e evite o mato.
     whiteout_penalty:          float = -8.0
-    whiteout_idle_multiplier:  float = 0.5   # escala penalty de forma muito suave
+    whiteout_idle_multiplier:  float = 0.0   # [FIX] flat penalty para não punir morte natural
 
     # [FIX v12-B / v13-A] Anti-farming: threshold RANDOMIZADO por episódio
     # v12 usava 0.60 fixo → agente calibrou farming em exatamente 0.60.
@@ -145,10 +149,33 @@ class Config:
     badge_weight:         float = 50.0
     milestone_weight:     float = 10.0
     stuck_threshold:      int   = 150
-    stuck_penalty:        float = -0.05
+    stuck_penalty:        float = -0.20
 
     # North bonus (y decresce ao ir para norte no FireRed)
-    north_bonus_per_tile: float = 1.0
+    # [FIX v17] Aumentado de 1.0 -> 2.5: norte é o caminho do lab, deve ser irresistível
+    north_bonus_per_tile: float = 2.5
+
+    # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
+    # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
+    map_explore_cap_interior: float = 25.0   # bank=4 (quartos, casas) — esgota rápido
+    map_explore_cap_exterior: float = 300.0  # bank!=4 (ruas, rotas) — praticamente ilimitado
+
+    # Bônus sustentado por estar do lado de fora (bank!=4): incentivo positivo constante
+    outdoor_sustain_bonus: float = 0.015
+
+    # Early termination: encerra episódio sem penalidade se agente nunca sair de bank=4
+    # Episódio curto = poucos pontos. Episódio longo lá fora = muitos pontos.
+    interior_only_terminate_steps: int = 600
+
+    # [FIX v17] Removido: map_boredom_penalty (causava -230 quebrando gradiente)
+    # [FIX v17] Removido: map_explore_cap (substituído por caps diferenciados)
+    # [FIX v17] Removido: map_chain_bonus (north_bonus já dá direção clara)
+
+    # [FIX v18] Penalidade interior muito pequena e calibrada:
+    # - 600 steps dentro = -3.0 máximo
+    # - Sair para Pallet Town = +30.0 new_map_bonus
+    # - Net ao sair: +27.0 positivo mesmo após penalidade máxima
+    indoor_step_penalty: float = -0.005
 
     # --- RAM sanity caps ---
     max_party_level_sum: int = 600

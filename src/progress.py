@@ -10,14 +10,15 @@ from src.reader import RamReader
 
 class ProgressManager:
     MILESTONES: list[tuple] = [
-        (3, 0,  "Viridian City",    0),
-        (3, 1,  "Pewter City",      0),
-        (3, 2,  "Cerulean City",    1),
-        (3, 6,  "Vermilion City",   2),
-        (3, 7,  "Celadon City",     3),
-        (3, 10, "Fuchsia City",     4),
-        (3, 11, "Saffron City",     5),
-        (3, 12, "Cinnabar Island",  6),
+        (3, 0,  "Got Pokemon",      0),  # Pallet Town with a Pokemon
+        (3, 1,  "Viridian City",    0),  # Corrected from (3, 0)
+        (3, 2,  "Pewter City",      0),  # Corrected from (3, 1)
+        (3, 3,  "Cerulean City",    1),  # Corrected from (3, 2)
+        (3, 5,  "Vermilion City",   2),  # Corrected from (3, 6)
+        (3, 6,  "Celadon City",     3),  # Corrected from (3, 7)
+        (3, 7,  "Fuchsia City",     4),  # Corrected from (3, 10)
+        (3, 10, "Saffron City",     5),  # Corrected from (3, 11)
+        (3, 8,  "Cinnabar Island",  6),  # Corrected from (3, 12)
         (2, 52, "Victory Road",     7),
         (2, 28, "Indigo Plateau",   8),
     ]
@@ -36,16 +37,22 @@ class ProgressManager:
     @property
     def current_state_file(self) -> str:
         import random
-        if self._best_milestone_idx < 0:
+        # Se temos milestones salvos, usamos a lógica avançada
+        if self._best_milestone_idx >= 0:
+            advanced_ratio = min(0.2 + self._best_milestone_idx * 0.08, 0.8)
+            if random.random() < advanced_ratio:
+                return self._best_state_file
             return CFG.state_file
-
-        advanced_ratio = min(0.2 + self._best_milestone_idx * 0.08, 0.8)
-        if random.random() < advanced_ratio:
-            return self._best_state_file
+            
+        # Se não temos milestones, 60% de chance de iniciar da rua (se existir)
+        if os.path.exists(CFG.pallet_exterior_state_file):
+            if random.random() < CFG.exterior_start_ratio:
+                return CFG.pallet_exterior_state_file
+                
         return CFG.state_file
 
     def check_and_save(self, emulator, map_bank: int, map_id: int,
-                       badges: int, env_id: int) -> float:
+                       badges: int, party_level: int, env_id: int) -> float:
         key = (map_bank, map_id)
         if key not in self.MILESTONE_MAP:
             return 0.0
@@ -56,6 +63,9 @@ class ProgressManager:
             return 0.0
 
         if badges < badge_min:
+            return 0.0
+
+        if nome == "Got Pokemon" and party_level == 0:
             return 0.0
 
         state_path = self._state_path(idx, nome)
