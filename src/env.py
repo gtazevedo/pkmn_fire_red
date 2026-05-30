@@ -184,6 +184,7 @@ class PokemonEnv(gym.Env):
         # [FIX v15-Stairs] Reset do controle de loop
         self._map_history.clear()
         self._last_map_transition_step = 0
+        self._stairs_loop_count = 0
 
         # [FIX v17] Reset incentivos positivos
         self._explore_reward_per_map  = {}
@@ -263,9 +264,19 @@ class PokemonEnv(gym.Env):
                 all_indoor = (map_key[0] == 4 and self._map_history[-1][0] == 4 and self._map_history[-2][0] == 4)
                 
                 if steps_since_transition < 150 and all_indoor:
-                    penalty = -3.0
-                    step_reward += self._rewards.add("stuck", penalty)
-                    log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP DETECTED (A->B->A inside)! Penalty {penalty:.1f} applied.")
+                    self._stairs_loop_count += 1
+                    if self._stairs_loop_count >= 3:
+                        penalty = -15.0
+                        step_reward += self._rewards.add("stuck", penalty)
+                        terminated = True
+                        log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP FATAL! 3x repetido. Terminating (penalty {penalty:.1f})")
+                    else:
+                        penalty = -3.0
+                        step_reward += self._rewards.add("stuck", penalty)
+                        log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP DETECTED (A->B->A inside)! Penalty {penalty:.1f} applied.")
+            else:
+                # Se não for um loop de A->B->A, reseta o contador de loop de escadas consecutivo
+                self._stairs_loop_count = 0
             
             # Adiciona ao histórico e mantém limite de tamanho 3
             self._map_history.append(map_key)
