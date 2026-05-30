@@ -80,10 +80,14 @@ class RamAdvisor:
         situation = self.SIT_EXPLORE
         decoded_text = ""
 
-        if ram_array is not None and len(ram_array) > 138520 + 256:
+        text_changed = False
+        # Só lê o EWRAM de texto se o jogador estiver travado numa animação/script de NPC ou na batalha.
+        # Isso previne o "text farming exploit", onde o agente ficava apertando "A" para o vento lendo o lixo na RAM.
+        if (script_lock or in_battle) and ram_array is not None and len(ram_array) > 138520 + 256:
             # Lê o buffer de diálogo de EWRAM na posição 0x02021D18 (índice 138520)
             dialogue_bytes = ram_array[138520:138520+256]
             decoded_text = self.decode_ram_text(dialogue_bytes)
+            text_changed = (decoded_text != self._last_decoded_text)
             self._last_decoded_text = decoded_text
 
         # Classifica a situação usando regras de texto se o texto existir
@@ -127,7 +131,7 @@ class RamAdvisor:
         self._last_situation    = situation
         self._current_situation = situation
 
-        return self._compute_bonus(situation, action_idx)
+        return self._compute_bonus(situation, action_idx, text_changed)
 
     def get_embedding(self) -> np.ndarray:
         sit = self._current_situation
@@ -177,7 +181,9 @@ class RamAdvisor:
             "advisor/total_bonus":    self.total_bonus,
         }
 
-    def _compute_bonus(self, situation: int, action_idx: int) -> float:
+    MAX_TEXT_BONUS = 50.0  # Limite máximo de bônus ganho por textos por episódio
+
+    def _compute_bonus(self, situation: int, action_idx: int, text_changed: bool) -> float:
         if situation == self.SIT_YES_NO:
             rec_action = self.B_IDX
             bonus = self.YES_NO_BONUS
@@ -189,7 +195,7 @@ class RamAdvisor:
             bonus = self.HEAL_BONUS
         elif situation == self.SIT_DIALOG:
             rec_action = self.A_IDX
-            bonus = self.DIALOG_BONUS
+            bonus = 0.5 if text_changed else 0.0  # +0.5 apenas se o texto avançou!
         elif situation == self.SIT_BATTLE:
             rec_action = self.A_IDX
             bonus = self.BATTLE_BONUS
@@ -199,8 +205,11 @@ class RamAdvisor:
         else:
             return 0.0
 
-        if action_idx == rec_action:
-            self.hints_matched += 1
-            self.total_bonus   += bonus
+        if action_idx == rec_action and bonus > 0.0:
+            if self.total_bonus + bonus > self.MAX_TEXT_BONUS:
+                bonus = max(0.0, self.MAX_TEXT_BONUS - self.total_bonus)
+            if bonus > 0:
+                self.hints_matched += 1
+                self.total_bonus   += bonus
             return bonus
         return 0.0

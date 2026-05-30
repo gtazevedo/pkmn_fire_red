@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-import sys, os
+import sys, os, random
 sys.path.insert(0, '/home/guilh/projects/pkmn_fire_red')
 import stable_retro as retro
-import random
 import numpy as np
 from src.reader import RamReader
 from src.config import CFG
@@ -13,7 +12,6 @@ ACTIONS = [
     np.array([0,0,0,0,0,0,1,0,0,0,0,0]), # LEFT
     np.array([0,0,0,0,0,0,0,1,0,0,0,0]), # RIGHT
 ]
-
 NO_OP = np.array([0]*12)
 
 def step_btn(env, btn, held=6, noop=4):
@@ -38,18 +36,18 @@ def main():
     
     # Quarto -> Sala
     for btn in [ACTIONS[3], ACTIONS[3], ACTIONS[1], ACTIONS[1], ACTIONS[1], ACTIONS[1], ACTIONS[3], ACTIONS[3], ACTIONS[1]]:
-        info = step_btn(env, btn, 12, 4)
+        info = step_btn(env, btn, 12, 60) # wait longer for map transition
         if get_pos(env, info)[1] == 1:
             break
             
     bank, mid, x, y = get_pos(env, info)
     print(f"Sala alcançada: x={x} y={y}")
 
-    # Random walk until exit
-    for step in range(5000):
-        # Biased towards DOWN and LEFT
+    # Random walk with long NOOP to catch map transitions!
+    for step in range(500):
+        # Heavy bias towards DOWN and LEFT
         btn = random.choices(ACTIONS, weights=[0.4, 0.1, 0.4, 0.1])[0]
-        info = step_btn(env, btn, 8, 2)
+        info = step_btn(env, btn, 12, 60) # 60 frames NOOP = 1 second of waiting
         bank, mid, x, y = get_pos(env, info)
         if bank == 3:
             break
@@ -61,7 +59,8 @@ def main():
             f.write(env.em.get_state())
         print(f"✅ Salvo: {save_path} (bank={bank} mid={mid} x={x} y={y})")
     else:
-        print(f"❌ Falhou (bank={bank} mid={mid} x={x} y={y})")
+        print(f"❌ Falhou na sala (bank={bank} mid={mid} x={x} y={y})")
+        
     env.close()
 
 if __name__ == '__main__':

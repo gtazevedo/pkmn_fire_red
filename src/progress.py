@@ -9,103 +9,81 @@ from src.config import CFG, log
 from src.reader import RamReader
 
 class ProgressManager:
-    MILESTONES: list[tuple] = [
-        (3, 0,  "Got Pokemon",      0),  # Pallet Town with a Pokemon
-        (3, 1,  "Viridian City",    0),  # Corrected from (3, 0)
-        (3, 2,  "Pewter City",      0),  # Corrected from (3, 1)
-        (3, 3,  "Cerulean City",    1),  # Corrected from (3, 2)
-        (3, 5,  "Vermilion City",   2),  # Corrected from (3, 6)
-        (3, 6,  "Celadon City",     3),  # Corrected from (3, 7)
-        (3, 7,  "Fuchsia City",     4),  # Corrected from (3, 10)
-        (3, 10, "Saffron City",     5),  # Corrected from (3, 11)
-        (3, 8,  "Cinnabar Island",  6),  # Corrected from (3, 12)
-        (2, 52, "Victory Road",     7),
-        (2, 28, "Indigo Plateau",   8),
-    ]
-
-    MILESTONE_MAP: dict = {
-        (b, i): (nome, badge, idx)
-        for idx, (b, i, nome, badge) in enumerate(MILESTONES)
-    }
-
+    """
+    Substitui os Milestones estáticos por um currículo dinâmico baseado em Event Flags.
+    Sempre que a soma das flags aumenta em 5 (ou 10), salvamos um novo state.
+    Ao iniciar um episódio, sorteamos um state dentre os já descobertos.
+    """
     def __init__(self):
         os.makedirs(CFG.progress_dir, exist_ok=True)
-        self._best_milestone_idx: int = -1
-        self._best_state_file: str    = CFG.state_file
+        self._best_flags_ever: int = 0
+        self._saved_states: list[str] = [CFG.state_file]
+        if os.path.exists(CFG.pallet_exterior_state_file):
+            self._saved_states.append(CFG.pallet_exterior_state_file)
         self._load_best_from_disk()
 
     @property
     def current_state_file(self) -> str:
         import random
-        # Se temos milestones salvos, usamos a lógica avançada
-        if self._best_milestone_idx >= 0:
-            advanced_ratio = min(0.2 + self._best_milestone_idx * 0.08, 0.8)
-            if random.random() < advanced_ratio:
-                return self._best_state_file
-            return CFG.state_file
-            
-        # Se não temos milestones, 60% de chance de iniciar da rua (se existir)
-        if os.path.exists(CFG.pallet_exterior_state_file):
-            if random.random() < CFG.exterior_start_ratio:
-                return CFG.pallet_exterior_state_file
-                
-        return CFG.state_file
+        # Sorteia um state do pool descoberto. Dá leve preferência pros states mais avançados?
+        # Para simplificar: sorteio uniforme para manter exploração ampla.
+        return random.choice(self._saved_states)
 
-    def check_and_save(self, emulator, map_bank: int, map_id: int,
-                       badges: int, party_level: int, env_id: int) -> float:
-        key = (map_bank, map_id)
-        if key not in self.MILESTONE_MAP:
-            return 0.0
+    def check_and_save(self, emulator, total_flags: int, env_id: int) -> float:
+        # Se quebrou o recorde histórico absoluto...
+        if total_flags > self._best_flags_ever:
+            # Salvamos um novo checkpoint a cada 5 flags novas no histórico global
+            if total_flags >= self._best_flags_ever + 5 or self._best_flags_ever == 0:
+                state_path = self._state_path(total_flags)
+                try:
+                    state_data = emulator.em.get_state()
+                    with open(state_path, "wb") as f:
+                        f.write(state_data)
+                    
+                    if state_path not in self._saved_states:
+                        self._saved_states.append(state_path)
+                        
+                    log.info(
+                        f"[Env {env_id}] ★ NEW EVENT RECORD: {total_flags} flags! "
+                        f"Saved → {state_path}"
+                    )
+                    self._best_flags_ever = total_flags
+                except Exception as e:
+                    log.warning(f"[Env {env_id}] Falha ao salvar state de flag: {e}")
+            else:
+                # Atualiza o best flags silenciosamente se for menor que 5 pulos, 
+                # mas não precisamos salvar no disco pra poupar IO.
+                # Na verdade é melhor atualizar o best_flags_ever só quando salvar?
+                # Se atualizarmos só quando salvar, ele pode demorar, mas ok.
+                pass
+        return 0.0
 
-        nome, badge_min, idx = self.MILESTONE_MAP[key]
-
-        if idx <= self._best_milestone_idx:
-            return 0.0
-
-        if badges < badge_min:
-            return 0.0
-
-        if nome == "Got Pokemon" and party_level == 0:
-            return 0.0
-
-        state_path = self._state_path(idx, nome)
-        try:
-            state_data = emulator.em.get_state()
-            with open(state_path, "wb") as f:
-                f.write(state_data)
-            self._best_milestone_idx = idx
-            self._best_state_file    = state_path
-            log.info(
-                f"[Env {env_id}] ★ MILESTONE: {nome} "
-                f"(idx={idx}, badges={badges}) → {state_path}"
-            )
-            return CFG.milestone_weight
-        except Exception as e:
-            log.warning(f"[Env {env_id}] Falha ao salvar milestone {nome}: {e}")
-            return 0.0
-
-    def _state_path(self, idx: int, nome: str) -> str:
-        safe_nome = nome.replace(" ", "_").lower()
-        return os.path.join(CFG.progress_dir, f"milestone_{idx:02d}_{safe_nome}.state")
+    def _state_path(self, total_flags: int) -> str:
+        return os.path.join(CFG.progress_dir, f"events_{total_flags:03d}.state")
 
     def _load_best_from_disk(self) -> None:
-        best_idx  = -1
-        best_path = CFG.state_file
-        for idx, (bank, mid, nome, _badge) in enumerate(self.MILESTONES):
-            path = self._state_path(idx, nome)
-            if os.path.exists(path):
-                best_idx  = idx
-                best_path = path
-        if best_idx >= 0:
-            nome = self.MILESTONES[best_idx][2]
-            log.info(
-                f"[ProgressManager] Carregando progresso salvo: "
-                f"{nome} (milestone {best_idx}) → {best_path}"
-            )
+        # Carrega states existentes do disco para o pool
+        import glob
+        pattern = os.path.join(CFG.progress_dir, "events_*.state")
+        files = glob.glob(pattern)
+        max_flag = 0
+        for f in files:
+            if f not in self._saved_states:
+                self._saved_states.append(f)
+            # Extrai o numero de flags do nome
+            basename = os.path.basename(f)
+            try:
+                num = int(basename.replace("events_", "").replace(".state", ""))
+                if num > max_flag:
+                    max_flag = num
+            except ValueError:
+                pass
+        
+        self._best_flags_ever = max_flag
+        if max_flag > 0:
+            log.info(f"[ProgressManager] Currículo dinâmico: {len(files)} states carregados, recorde = {max_flag} flags.")
         else:
             log.info("[ProgressManager] Sem progresso salvo — iniciando do começo.")
-        self._best_milestone_idx = best_idx
-        self._best_state_file    = best_path
 
 
 _progress_manager: Optional[ProgressManager] = None
@@ -132,6 +110,8 @@ class RewardAccumulator:
     milestone: float = 0.0
     victory:   float = 0.0
     idle_pen:  float = 0.0
+    op_lvl:    float = 0.0
+    heal:      float = 0.0
 
     def add(self, component: str, value: float) -> float:
         setattr(self, component, getattr(self, component) + value)
@@ -141,7 +121,7 @@ class RewardAccumulator:
     def reset(self) -> None:
         self.total = self.explore = self.map_disc = self.damage = 0.0
         self.levelup = self.badge = self.stuck = self.time_pen = self.text = self.entry = self.milestone = 0.0
-        self.victory = self.idle_pen = 0.0
+        self.victory = self.idle_pen = self.op_lvl = self.heal = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -158,6 +138,8 @@ class RewardAccumulator:
             "reward_milestone": self.milestone,
             "reward_victory":   self.victory,
             "reward_idle_pen":  self.idle_pen,
+            "reward_op_lvl":    self.op_lvl,
+            "reward_heal":      self.heal,
         }
 
 
@@ -214,6 +196,11 @@ class EpisodeStats:
     # [FIX v12-C] Controle de cooldown pós-whiteout por tile
     whiteout_tile_cooldown: dict = field(default_factory=dict)
 
+    # [FIX v18.3] Healing and max enemy level tracking
+    total_healing_rew: float = 0.0
+    party_size: int = 0
+    max_event_sum: int = 0
+
     # [FIX 6] Sentinel para level baseline
     _level_baseline_set: bool = False
 
@@ -223,8 +210,9 @@ class EpisodeStats:
     )
     all_maps_visited:       set = field(default_factory=set)
     furthest_map_count:     int = 0
+    max_enemy_lvl_ever:     int = 0
 
-    def reset(self, info: dict) -> None:
+    def reset(self, info: dict, ram_array=None) -> None:
         self.tile_visits       = defaultdict(int)
         self.map_visits        = set()
         self.steps_on_cur_tile = 0
@@ -241,6 +229,8 @@ class EpisodeStats:
         self.initial_enemy_hp  = 0
         self.near_ko_paid      = False
         self.last_party_hp     = RamReader.party_hp(info)
+        self.party_size        = RamReader.party_size(info)
+        self.total_healing_rew = 0.0
         self.was_in_battle     = False
         self.last_badges       = RamReader.badges(info)
         self.battle_idle_steps = 0
@@ -255,6 +245,9 @@ class EpisodeStats:
         self.farm_detections             = 0
         self.first_strike_paid           = False
         self.steps_in_battle_current     = 0
+        
+        self.max_event_sum = RamReader.event_flags_sum(ram_array)
+
         # Não reseta whiteout_tile_cooldown — persiste entre episódios
         self.whiteout_tile_cooldown = {
             t: max(0, c - 1)
@@ -270,6 +263,15 @@ class EpisodeStats:
         else:
             self.max_level           = 0
             self._level_baseline_set = False
+
+    def update_events(self, ram_array) -> tuple[float, int]:
+        total_flags = RamReader.event_flags_sum(ram_array)
+        if total_flags > self.max_event_sum:
+            diff = total_flags - self.max_event_sum
+            self.max_event_sum = total_flags
+            # Peso de 20.0 por cada flag nova descoberta
+            return diff * 20.0, total_flags
+        return 0.0, total_flags
 
     def update_exploration(self, tile: tuple, map_key: tuple) -> tuple[float, bool]:
         if map_key != getattr(self, '_last_map_for_stuck', None):
@@ -291,11 +293,28 @@ class EpisodeStats:
         self.map_visits.add(map_key)
         self.all_maps_visited.add(map_key)
 
-        # [FIX v11-G] explore_floor 0.15→0.05 + boost para tiles quase novos
-        base_r = max(CFG.explore_weight / math.sqrt(n), CFG.explore_floor)
-        # Bônus extra para tiles com <= 3 visitas persistentes (incentiva fronteira)
-        if n <= 3:
-            base_r += CFG.explore_new_tile_boost
+        if not hasattr(self, 'explore_rewards_per_map'):
+            self.explore_rewards_per_map = defaultdict(float)
+
+        # [FIX v18.2] Regras estritas de exploração
+        # 1. Bônus apenas na PRIMEIRA vez que pisa no tile (naquele episódio)
+        if self.tile_visits[tile] == 1:
+            base_r = CFG.explore_weight
+        else:
+            base_r = 0.0
+
+        # Adiciona ao contador do mapa
+        if base_r > 0:
+            self.explore_rewards_per_map[map_key] += base_r
+
+        # 2. Se o mapa bateu no limite de exploração (150 pontos = 150 tiles)
+        if self.explore_rewards_per_map[map_key] > CFG.max_explore_reward_per_map:
+            self.explore_rewards_per_map[map_key] = CFG.max_explore_reward_per_map
+            base_r = 0.0
+
+        # 3. Punição por ficar enrolando em mapa já 100% explorado
+        if self.explore_rewards_per_map[map_key] >= CFG.max_explore_reward_per_map:
+            base_r += CFG.stale_map_penalty
 
         if is_new_map_ever:
             # [FIX v11-I] new_map_bonus diferenciado por bank
@@ -464,6 +483,29 @@ class EpisodeStats:
         self.levels_gained += delta
         self.max_level      = current_level
         log.info(f"[Env {env_id}] Level up! +{delta} → total={current_level}")
+        return reward
+
+    def update_max_op_level(self, info: dict) -> float:
+        current_max = RamReader.max_enemy_level(info)
+        if current_max > self.max_enemy_lvl_ever:
+            self.max_enemy_lvl_ever = current_max
+            return self.max_enemy_lvl_ever * CFG.max_op_level_reward_scale
+        return 0.0
+
+    def update_heal_reward(self, info: dict) -> float:
+        cur_hp = RamReader.party_hp(info)
+        cur_party_size = RamReader.party_size(info)
+        max_hp = RamReader.party_max_hp(info)
+        reward = 0.0
+        
+        # Only reward healing if party size hasn't changed
+        if cur_hp > self.last_party_hp and cur_party_size == self.party_size:
+            if self.last_party_hp > 0 and max_hp > 0:
+                heal_pct = (cur_hp - self.last_party_hp) / max(1, max_hp)
+                reward = heal_pct * CFG.heal_reward_scale
+                self.total_healing_rew += reward
+        
+        self.party_size = cur_party_size
         return reward
 
     def update_badges(self, badges: int, env_id: int) -> float:

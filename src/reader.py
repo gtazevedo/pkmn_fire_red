@@ -10,6 +10,43 @@ class RamReader:
         return cls._clamp(info.get(key, 0), 0, CFG.max_coord)
 
     @classmethod
+    def event_flags_sum(cls, ram_array) -> int:
+        """
+        Lê dinamicamente o gSaveBlock1Ptr no IRAM (0x03005008) para encontrar o SaveBlock1 no WRAM.
+        A partir daí, lê o bloco de Event Flags (offset 0x0EE0) e soma todos os bits ligados.
+        """
+        if ram_array is None:
+            return 0
+        
+        iram_start = 262144
+        ptr_idx = iram_start + 0x5008
+        if len(ram_array) <= ptr_idx + 3:
+            return 0
+            
+        b1, b2, b3, b4 = int(ram_array[ptr_idx]), int(ram_array[ptr_idx+1]), int(ram_array[ptr_idx+2]), int(ram_array[ptr_idx+3])
+        ptr_val = b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)
+        
+        # WRAM address check (e.g. 0x02025eb4)
+        if (ptr_val >> 24) != 0x02:
+            return 0
+            
+        wram_offset = ptr_val & 0x00FFFFFF
+        flags_start = wram_offset + 0x0EE0
+        flags_end = wram_offset + 0x1000
+        
+        if len(ram_array) <= flags_end:
+            return 0
+            
+        flags_block = ram_array[flags_start:flags_end]
+        
+        # Conta a quantidade de bits '1' no bloco inteiro
+        total_flags = 0
+        for byte in flags_block:
+            total_flags += byte.bit_count()
+            
+        return total_flags
+
+    @classmethod
     def map_id(cls, info: dict) -> int:
         return cls._clamp(info.get("map_id", 0), 0, CFG.max_map_id)
 
@@ -36,9 +73,21 @@ class RamReader:
         return cls._clamp(total, 0, CFG.max_party_hp)
 
     @classmethod
+    def party_size(cls, info: dict) -> int:
+        return sum(1 for i in range(1, 7) if info.get(f"p{i}_maxhp", 0) > 0)
+
+    @classmethod
+    def party_max_hp(cls, info: dict) -> int:
+        return sum(info.get(f"p{i}_maxhp", 0) for i in range(1, 7))
+
+    @classmethod
     def enemy_hp(cls, info: dict) -> int:
         total = sum(info.get(f"e{i}_hp", 0) for i in range(1, 7))
         return cls._clamp(total, 0, CFG.max_enemy_hp)
+
+    @classmethod
+    def max_enemy_level(cls, info: dict) -> int:
+        return max((info.get(f"e{i}_lvl", 0) for i in range(1, 7)), default=0)
 
     @classmethod
     def in_battle(cls, info: dict) -> bool:

@@ -66,16 +66,17 @@ class Config:
     pool_end:    int = 8
 
     # --- reward weights ---
-    time_penalty:    float = -0.003
+    # [FIX v18.3] Remoção do medo do tempo (Whiddy-style).
+    # Como não perdemos mais tempo passivamente, o limite de passos cuida da inércia.
+    time_penalty:    float = 0.0
     explore_weight:  float = 1.0
 
-    # [FIX v15] persistent_decay 0.80→0.995 e explore_floor 0.05→0.00
-    # O decaimento de 0.80 era muito agressivo, permitindo farm infinito de tiles
-    # antigos. explore_floor de 0.00 força o agente a genuinamente explorar.
-    persistent_visits_decay: float = 0.995
-    explore_floor:           float = 0.00
-    # Bônus extra para tiles quase não visitados (persistent_count <= 3)
-    explore_new_tile_boost:  float = 0.3
+    # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
+    max_op_level_reward_scale: float = 0.2
+    heal_reward_scale:         float = 4.0
+    # Quando o agente esgotar os tiles do mapa, ele ganha uma punição de tempo leve
+    max_explore_reward_per_map: float = 150.0
+    stale_map_penalty:          float = -0.002
 
     # [FIX v11-I] new_map_bonus 20→30 para cidades/dungeons (bank≠4)
     # bank=4 routes já têm north_bonus contínuo; cidades merecem mais.
@@ -91,8 +92,8 @@ class Config:
     hp_pct_scale:         float = 15.0
     damage_weight:        float = 0.05  # fallback
 
-    # [FIX v15] victory_bonus 20→35: derrotar inimigo deve ser extremamente positivo!
-    victory_bonus:        float = 35.0
+    # [FIX v18.2] victory_bonus aumentado para tornar a batalha mais lucrativa
+    victory_bonus:        float = 50.0
     near_ko_bonus:        float = 5.0
     post_battle_grace:    int   = 200
 
@@ -119,9 +120,8 @@ class Config:
     battle_b_penalty:     float = -0.10
     battle_b_threshold:   int   = 3  # só pena B após 3 A presses na batalha atual
 
-    # [FIX v15] Whiteout penalty reduzido para flat, escala super suave.
-    # Evita que o agente sinta pavor de ser derrotado e evite o mato.
-    whiteout_penalty:          float = -8.0
+    # [FIX v18.2] Whiteout penalty bastante reduzido para evitar fobia do rival.
+    whiteout_penalty:          float = -2.0
     whiteout_idle_multiplier:  float = 0.0   # [FIX] flat penalty para não punir morte natural
 
     # [FIX v12-B / v13-A] Anti-farming: threshold RANDOMIZADO por episódio
@@ -136,11 +136,9 @@ class Config:
     # Evita punições desmedidas quando o agente apenas se perdeu nos menus.
     farm_episode_penalty:     float = -15.0
 
-    # [FIX v14-B] First Strike Bonus: pago na primeira vez que o agente causa
-    # dano numa batalha. Transfere a motivação de "entrar na grama" para
-    # "navegar o menu e atacar". entry_bonus vira simbólico (1.0), o lucro
-    # real só vem ao atacar.
-    first_strike_bonus:       float = 12.0  # ligeiramente maior que entry_bonus
+    # [FIX v18.2] First Strike Bonus: 25.0
+    # O lucro real de batalhar vem do first_strike_bonus.
+    first_strike_bonus:       float = 25.0
 
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0

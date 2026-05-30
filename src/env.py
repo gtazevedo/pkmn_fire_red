@@ -1,3 +1,4 @@
+import os
 import random
 from typing import Optional
 import numpy as np
@@ -152,14 +153,6 @@ class PokemonEnv(gym.Env):
         self._map_history.clear()
         self._last_map_transition_step = 0
 
-        # [FIX v11-G] Decay mais agressivo: 0.97→0.80
-        if CFG.persistent_visits_decay < 1.0 and self._stats.persistent_tile_visits:
-            decay = CFG.persistent_visits_decay
-            for tile in self._stats.persistent_tile_visits:
-                self._stats.persistent_tile_visits[tile] = max(
-                    1, int(self._stats.persistent_tile_visits[tile] * decay)
-                )
-
         state_file = self._progress.current_state_file
         log.info(f"[Env {self.env_id}] Loading GBA state file: {state_file}")
         with open(state_file, "rb") as f:
@@ -181,7 +174,7 @@ class PokemonEnv(gym.Env):
             raw_frame, info = self._warm_up(n=5)
 
         RamReader.debug_dump(info, self.env_id, "POST-RESET")
-        self._stats.reset(info)
+        self._stats.reset(info, ram_array=self.env.get_ram())
         # [FIX v13-A] Propaga o threshold sorteado para _stats (usado em update_battle)
         self._stats._farm_ratio_threshold = self._farm_ratio_threshold
         self._rewards.reset()
@@ -215,20 +208,48 @@ class PokemonEnv(gym.Env):
         raw_frame, pooled, info  = self._run_action(action)
         self._last_raw_frame     = raw_frame
 
-        step_reward = self._rewards.add("time_pen", CFG.time_penalty)
-
         _in_battle_now  = RamReader.in_battle(info)
         _script_lock    = bool(RamReader.script_lock(info))
+        
+        step_reward = 0.0
+        # [FIX v18.2] Suspensão da punição de tempo durante diálogos
+        if not _script_lock:
+            step_reward += self._rewards.add("time_pen", CFG.time_penalty)
         ram_array       = self.env.get_ram()
         text_bonus      = self._advisor.update(_in_battle_now, _script_lock, action_idx, ram_array)
         step_reward    += self._rewards.add("text", text_bonus)
 
-        x        = RamReader.coord(info, "player_x", ram_array)
-        y        = RamReader.coord(info, "player_y", ram_array)
+        # [FIX v18.3] Novas recompensas Whiddy-style
+        op_lvl_bonus = self._stats.update_max_op_level(info)
+        step_reward += self._rewards.add("op_lvl", op_lvl_bonus)
+        
+        heal_bonus = self._stats.update_heal_reward(info)
+        step_reward += self._rewards.add("heal", heal_bonus)
+
+        event_bonus, total_flags = self._stats.update_events(ram_array)
+        if event_bonus > 0:
+            step_reward += self._rewards.add("milestone", event_bonus)
+            self._progress.check_and_save(self.env, total_flags, self.env_id)
+
+        x        = RamReader.coord(info, "player_x")
+        y        = RamReader.coord(info, "player_y")
         map_id   = RamReader.map_id(info)
         map_bank = RamReader.map_bank(info)
         tile     = (map_bank, map_id, x, y)
         map_key  = (map_bank, map_id)
+
+        # [FIX v18.1] Salva dinamicamente o state exterior apenas quando ele está
+        # a uma distância segura da porta (y >= 10), para evitar que nasça pisando
+        # no warp e volte para dentro de casa acidentalmente.
+        if map_bank == 3 and map_id == 0 and y >= 10:
+            if not getattr(self, '_saved_exterior_safe', False):
+                if not os.path.exists(CFG.pallet_exterior_state_file):
+                    state_data = self.env.em.get_state()
+                    os.makedirs(os.path.dirname(CFG.pallet_exterior_state_file), exist_ok=True)
+                    with open(CFG.pallet_exterior_state_file, "wb") as f:
+                        f.write(state_data)
+                    log.info(f"[Env {self.env_id}] 🎉 SALVO STATE EXTERIOR A UMA DISTANCIA SEGURA DA PORTA (y={y})!")
+                self._saved_exterior_safe = True
 
         # [FIX v15-Stairs] Detecção de loop de transição de mapas (A -> B -> A)
         # Se o mapa mudou em relação ao último mapa registrado
@@ -236,10 +257,15 @@ class PokemonEnv(gym.Env):
             # Se já temos histórico e voltamos para o mapa de antes do último (A -> B -> A)
             if len(self._map_history) >= 2 and map_key == self._map_history[-2]:
                 steps_since_transition = self._stats.steps - self._last_map_transition_step
-                if steps_since_transition < 150:
+                
+                # [FIX v18] Só aplica punição se o loop inteiro for dentro de mapas internos (bank=4).
+                # Isso permite transições casa <-> rua sem punição acidental.
+                all_indoor = (map_key[0] == 4 and self._map_history[-1][0] == 4 and self._map_history[-2][0] == 4)
+                
+                if steps_since_transition < 150 and all_indoor:
                     penalty = -3.0
                     step_reward += self._rewards.add("stuck", penalty)
-                    log.info(f"[Env {self.env_id}] 🚨 STAIRS/MAP LOOP DETECTED (A->B->A)! Penalty {penalty:.1f} applied.")
+                    log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP DETECTED (A->B->A inside)! Penalty {penalty:.1f} applied.")
             
             # Adiciona ao histórico e mantém limite de tamanho 3
             self._map_history.append(map_key)
@@ -296,12 +322,6 @@ class PokemonEnv(gym.Env):
         if is_new_map:
             self._rewards.add("map_disc", CFG.new_map_bonus if map_bank != 4 else CFG.new_map_bonus_route)
             log.info(f"[Env {self.env_id}] New map: bank={map_key[0]} id={map_key[1]}")
-            ms_bonus = self._progress.check_and_save(
-                self.env, map_bank, map_id,
-                RamReader.badges(info), RamReader.party_level(info), self.env_id
-            )
-            if ms_bonus > 0:
-                step_reward += self._rewards.add("milestone", ms_bonus)
 
         step_reward += self._rewards.add(
             "stuck",
