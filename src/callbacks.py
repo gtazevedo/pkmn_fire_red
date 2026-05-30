@@ -217,9 +217,7 @@ class PokemonCallback(BaseCallback):
         self._hist["exploration_net"].append(self._exploration_net(m))
 
     def _log_console(self, ep: int, m: dict) -> None:
-        milestone_idx  = m.get("best_milestone", -1)
-        milestone_name = (ProgressManager.MILESTONES[milestone_idx][2]
-                          if milestone_idx >= 0 else "Pallet")
+        event_record = m.get("best_milestone", 0)
         score      = self._progress_score(m)
         win_rate   = m["victories"] / max(m["battles_fought"], 1)
         combat_net = self._combat_net(m)
@@ -227,7 +225,7 @@ class PokemonCallback(BaseCallback):
         log.info(
             f"[Ep {ep:>5}|Ph{self._current_phase()}] "
             f"score={score:>5.1f}  "
-            f"milestone={milestone_name:<14}  "
+            f"events={event_record:>4}  "
             f"lvl={m['party_level']:>3}  "
             f"bat={m['battles_fought']:>2} win={win_rate:.0%}  "
             f"cnet={combat_net:>7.1f}  "

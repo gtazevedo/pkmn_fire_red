@@ -431,7 +431,7 @@ class PokemonEnv(gym.Env):
                 "advisor_text_bonus":    advisor_stats["advisor/total_bonus"],
                 "total_tiles_ever":      len(self._stats.persistent_tile_visits),
                 "total_maps_ever":       len(self._stats.all_maps_visited),
-                "best_milestone":        self._progress._best_milestone_idx,
+                "best_milestone":        self._progress._best_flags_ever,
                 "farm_detected":         int(self._stats.farm_detected),
                 "farm_detections":       self._stats.farm_detections,
             }
