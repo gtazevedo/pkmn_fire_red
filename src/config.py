@@ -68,7 +68,8 @@ class Config:
     # --- reward weights ---
     # [FIX v18.3] Remoção do medo do tempo (Whiddy-style).
     # Como não perdemos mais tempo passivamente, o limite de passos cuida da inércia.
-    time_penalty:    float = 0.0
+    # [FIX v18.4] Reativado levemente o time_penalty para causar inércia desconfortável e forçar movimento
+    time_penalty:    float = -0.001
     explore_weight:  float = 1.0
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
@@ -151,12 +152,13 @@ class Config:
 
     # North bonus (y decresce ao ir para norte no FireRed)
     # [FIX v17] Aumentado de 1.0 -> 2.5: norte é o caminho do lab, deve ser irresistível
-    north_bonus_per_tile: float = 2.5
+    # [FIX v18.4] Bônus direcional dobrado para forçar ativamente o PPO a cruzar a rota em direção a Viridian
+    north_bonus_per_tile: float = 5.0
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
     # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
     map_explore_cap_interior: float = 25.0   # bank=4 (quartos, casas) — esgota rápido
-    map_explore_cap_exterior: float = 300.0  # bank!=4 (ruas, rotas) — praticamente ilimitado
+    map_explore_cap_exterior: float = 2000.0 # bank!=4 (ruas, rotas) — expandido enormemente para cobrir toda a Rota 1
 
     # Bônus sustentado por estar do lado de fora (bank!=4): incentivo positivo constante
     outdoor_sustain_bonus: float = 0.015
