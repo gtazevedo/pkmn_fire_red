@@ -32,30 +32,23 @@ class ProgressManager:
     def check_and_save(self, emulator, total_flags: int, env_id: int) -> float:
         # Se quebrou o recorde histórico absoluto...
         if total_flags > self._best_flags_ever:
-            # Salvamos um novo checkpoint a cada 5 flags novas no histórico global
-            if total_flags >= self._best_flags_ever + 5 or self._best_flags_ever == 0:
-                state_path = self._state_path(total_flags)
-                try:
-                    state_data = emulator.em.get_state()
-                    with open(state_path, "wb") as f:
-                        f.write(state_data)
+            # Salvamos um novo checkpoint a cada nova flag (Curriculum Learning orgânico)
+            state_path = self._state_path(total_flags)
+            try:
+                state_data = emulator.em.get_state()
+                with open(state_path, "wb") as f:
+                    f.write(state_data)
+                
+                if state_path not in self._saved_states:
+                    self._saved_states.append(state_path)
                     
-                    if state_path not in self._saved_states:
-                        self._saved_states.append(state_path)
-                        
-                    log.info(
-                        f"[Env {env_id}] ★ NEW EVENT RECORD: {total_flags} flags! "
-                        f"Saved → {state_path}"
-                    )
-                    self._best_flags_ever = total_flags
-                except Exception as e:
-                    log.warning(f"[Env {env_id}] Falha ao salvar state de flag: {e}")
-            else:
-                # Atualiza o best flags silenciosamente se for menor que 5 pulos, 
-                # mas não precisamos salvar no disco pra poupar IO.
-                # Na verdade é melhor atualizar o best_flags_ever só quando salvar?
-                # Se atualizarmos só quando salvar, ele pode demorar, mas ok.
-                pass
+                log.info(
+                    f"[Env {env_id}] ★ NEW EVENT RECORD: {total_flags} flags! "
+                    f"Saved → {state_path}"
+                )
+                self._best_flags_ever = total_flags
+            except Exception as e:
+                log.warning(f"[Env {env_id}] Falha ao salvar state de flag: {e}")
         return 0.0
 
     def _state_path(self, total_flags: int) -> str:
