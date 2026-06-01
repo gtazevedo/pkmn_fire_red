@@ -35,16 +35,18 @@ class ProgressManager:
             # Salvamos um novo checkpoint a cada nova flag (Curriculum Learning orgânico)
             state_path = self._state_path(total_flags)
             try:
-                state_data = emulator.em.get_state()
-                with open(state_path, "wb") as f:
-                    f.write(state_data)
+                # [FIX v18.5] Race condition protection: só salva se o arquivo não existir
+                if not os.path.exists(state_path):
+                    state_data = emulator.em.get_state()
+                    with open(state_path, "wb") as f:
+                        f.write(state_data)
                 
                 if state_path not in self._saved_states:
                     self._saved_states.append(state_path)
                     
                 log.info(
                     f"[Env {env_id}] ★ NEW EVENT RECORD: {total_flags} flags! "
-                    f"Saved → {state_path}"
+                    f"Saved/Loaded → {state_path}"
                 )
                 self._best_flags_ever = total_flags
             except Exception as e:
