@@ -412,15 +412,15 @@ class EpisodeStats:
                         log.info(f"[Env {env_id}] Farm detected mas perdoado (party_level={party_level} < 15)")
                     else:
                         self.farm_detected    = True
-                    self.farm_detections += 1
-                    farm_terminate        = True
-                    log.info(
-                        f"[Env {env_id}] 🚨 FARM DETECTED! "
-                        f"battle_ratio={battle_ratio:.2f} "
-                        f"threshold={self._farm_ratio_threshold:.2f} "
-                        f"kill_eff={kill_eff:.4f} "
-                        f"→ terminating (penalty={CFG.farm_episode_penalty})"
-                    )
+                        self.farm_detections += 1
+                        farm_terminate        = True
+                        log.info(
+                            f"[Env {env_id}] 🚨 FARM DETECTED! "
+                            f"battle_ratio={battle_ratio:.2f} "
+                            f"threshold={self._farm_ratio_threshold:.2f} "
+                            f"kill_eff={kill_eff:.4f} "
+                            f"→ terminating (penalty={CFG.farm_episode_penalty})"
+                        )
 
         elif self.was_in_battle:
             self.battle_idle_steps        = 0
