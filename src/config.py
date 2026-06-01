@@ -86,7 +86,7 @@ class Config:
 
     # [FIX v15] battle_idle_penalty: -0.05 → -0.01, grace: 120 → 200
     # Punições muito altas geravam fobia de batalhas e colapso na grama.
-    battle_idle_penalty:  float = -0.01
+    battle_idle_penalty:  float = 0.0
     battle_idle_grace:    int   = 200   # mais carência para lidar com menus e gary
 
     # [FIX v11-C] Novo sistema de reward de dano baseado em HP%
@@ -117,25 +117,24 @@ class Config:
     battle_a_cap:         int   = 50
 
     # [FIX v11-B] B penalty só depois de battle_b_threshold A presses
-    # Antes era pago sempre, punindo navegação legítima de menu.
-    battle_b_penalty:     float = -0.10
-    battle_b_threshold:   int   = 3  # só pena B após 3 A presses na batalha atual
-
-    # [FIX v18.2] Whiteout penalty bastante reduzido para evitar fobia do rival.
-    whiteout_penalty:          float = -2.0
-    whiteout_idle_multiplier:  float = 0.0   # [FIX] flat penalty para não punir morte natural
+    # PWhiddy philosophy: zero punishments for menus/navigation
+    battle_b_penalty:     float = 0.0
+    battle_b_threshold:   int   = 999  # Disable b penalty
+    
+    # PWhiddy philosophy: zero punishment for whiteout
+    whiteout_penalty:          float = 0.0
+    whiteout_idle_multiplier:  float = 0.0
 
     # [FIX v12-B / v13-A] Anti-farming: threshold RANDOMIZADO por episódio
     # v12 usava 0.60 fixo → agente calibrou farming em exatamente 0.60.
     # v13: sorteado em [farm_ratio_threshold_min, farm_ratio_threshold_max]
     # a cada reset, tornando calibração impossível.
-    farm_ratio_threshold_min: float = 0.35
-    farm_ratio_threshold_max: float = 0.55
+    farm_ratio_threshold_min: float = 0.80
+    farm_ratio_threshold_max: float = 0.95
     farm_kill_threshold:      float = 0.003
     farm_detection_window:    int   = 200
-    # [FIX v15] farm_episode_penalty: -50.0 → -15.0
-    # Evita punições desmedidas quando o agente apenas se perdeu nos menus.
-    farm_episode_penalty:     float = -15.0
+    # Soft reset to prevent endless loops, but no harsh punishment
+    farm_episode_penalty:     float = 0.0
 
     # [FIX v18.2] First Strike Bonus: 25.0
     # O lucro real de batalhar vem do first_strike_bonus.
@@ -148,7 +147,7 @@ class Config:
     badge_weight:         float = 50.0
     milestone_weight:     float = 10.0
     stuck_threshold:      int   = 150
-    stuck_penalty:        float = -0.20
+    stuck_penalty:        float = 0.0
 
     # North bonus (y decresce ao ir para norte no FireRed)
     # [FIX v17] Aumentado de 1.0 -> 2.5: norte é o caminho do lab, deve ser irresistível
@@ -175,7 +174,7 @@ class Config:
     # - 600 steps dentro = -3.0 máximo
     # - Sair para Pallet Town = +30.0 new_map_bonus
     # - Net ao sair: +27.0 positivo mesmo após penalidade máxima
-    indoor_step_penalty: float = -0.005
+    indoor_step_penalty: float = 0.0
 
     # --- RAM sanity caps ---
     max_party_level_sum: int = 600

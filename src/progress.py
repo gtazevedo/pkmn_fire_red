@@ -331,7 +331,8 @@ class EpisodeStats:
                        script_lock: bool,
                        last_raw_frame: Optional[np.ndarray], env_id: int,
                        episode_num: int,
-                       current_tile: tuple) -> tuple:
+                       current_tile: tuple,
+                       party_level: int) -> tuple:
         reward         = 0.0
         idle_pen       = 0.0
         vic_bonus      = 0.0
@@ -406,7 +407,11 @@ class EpisodeStats:
 
                 if (battle_ratio > self._farm_ratio_threshold and
                         kill_eff < CFG.farm_kill_threshold):
-                    self.farm_detected    = True
+                    # Perdão dinâmico: se o nível for menor que 15, não pune.
+                    if party_level < 15:
+                        log.info(f"[Env {env_id}] Farm detected mas perdoado (party_level={party_level} < 15)")
+                    else:
+                        self.farm_detected    = True
                     self.farm_detections += 1
                     farm_terminate        = True
                     log.info(
