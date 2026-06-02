@@ -162,9 +162,8 @@ class Config:
     # Bônus sustentado por estar do lado de fora (bank!=4): incentivo positivo constante
     outdoor_sustain_bonus: float = 0.015
 
-    # Early termination: encerra episódio sem penalidade se agente nunca sair de bank=4
-    # Episódio curto = poucos pontos. Episódio longo lá fora = muitos pontos.
-    interior_only_terminate_steps: int = 600
+    # Early termination desativado (Whiddy philosophy) para não matar o agente no meio da batalha contra o Gary.
+    interior_only_terminate_steps: int = 10000
 
     # [FIX v17] Removido: map_boredom_penalty (causava -230 quebrando gradiente)
     # [FIX v17] Removido: map_explore_cap (substituído por caps diferenciados)
