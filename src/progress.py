@@ -302,14 +302,16 @@ class EpisodeStats:
         if base_r > 0:
             self.explore_rewards_per_map[map_key] += base_r
 
-        # 2. Se o mapa bateu no limite de exploração (150 pontos = 150 tiles)
-        if self.explore_rewards_per_map[map_key] > CFG.max_explore_reward_per_map:
-            self.explore_rewards_per_map[map_key] = CFG.max_explore_reward_per_map
+        # 2. Define o cap de exploração baseado no tipo de mapa
+        map_bank = map_key[0]
+        explore_cap = CFG.map_explore_cap_interior if map_bank == 4 else CFG.map_explore_cap_exterior
+
+        # 3. Se o mapa bateu no limite de exploração
+        if self.explore_rewards_per_map[map_key] > explore_cap:
+            self.explore_rewards_per_map[map_key] = explore_cap
             base_r = 0.0
 
-        # 3. Punição por ficar enrolando em mapa já 100% explorado
-        if self.explore_rewards_per_map[map_key] >= CFG.max_explore_reward_per_map:
-            base_r += CFG.stale_map_penalty
+        # PWhiddy philosophy: No stale_map_penalty here. If fully explored, just gives 0 points.
 
         if is_new_map_ever:
             # [FIX v11-I] new_map_bonus diferenciado por bank
@@ -409,7 +411,7 @@ class EpisodeStats:
                         kill_eff < CFG.farm_kill_threshold):
                     # Perdão dinâmico: se o nível for menor que 15, não pune.
                     if party_level < 15:
-                        log.info(f"[Env {env_id}] Farm detected mas perdoado (party_level={party_level} < 15)")
+                        pass # Silencia o log para não dar spam a cada frame
                     else:
                         self.farm_detected    = True
                         self.farm_detections += 1

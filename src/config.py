@@ -77,7 +77,7 @@ class Config:
     heal_reward_scale:         float = 4.0
     # Quando o agente esgotar os tiles do mapa, ele ganha uma punição de tempo leve
     max_explore_reward_per_map: float = 150.0
-    stale_map_penalty:          float = -0.002
+    stale_map_penalty:          float = 0.0
 
     # [FIX v11-I] new_map_bonus 20→30 para cidades/dungeons (bank≠4)
     # bank=4 routes já têm north_bonus contínuo; cidades merecem mais.
@@ -159,8 +159,7 @@ class Config:
     map_explore_cap_interior: float = 25.0   # bank=4 (quartos, casas) — esgota rápido
     map_explore_cap_exterior: float = 2000.0 # bank!=4 (ruas, rotas) — expandido enormemente para cobrir toda a Rota 1
 
-    # Bônus sustentado por estar do lado de fora (bank!=4): incentivo positivo constante
-    outdoor_sustain_bonus: float = 0.015
+    outdoor_sustain_bonus: float = 0.0
 
     # Early termination desativado (Whiddy philosophy) para não matar o agente no meio da batalha contra o Gary.
     interior_only_terminate_steps: int = 10000
