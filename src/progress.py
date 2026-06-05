@@ -155,6 +155,8 @@ class EpisodeStats:
     levels_gained:     int  = 0
     battles_fought:    int  = 0
     victories:         int  = 0
+    global_battles_fought: int = 0
+    global_victories:      int = 0
     last_enemy_hp:     int  = 0
     # [FIX v11-C] HP inicial do inimigo para calcular reward por HP%
     initial_enemy_hp:  int  = 0
@@ -206,6 +208,11 @@ class EpisodeStats:
     all_maps_visited:       set = field(default_factory=set)
     furthest_map_count:     int = 0
     max_enemy_lvl_ever:     int = 0
+
+    def global_win_rate(self) -> float:
+        if self.global_battles_fought == 0:
+            return 0.0
+        return self.global_victories / self.global_battles_fought
 
     def reset(self, info: dict, ram_array=None) -> None:
         self.tile_visits       = defaultdict(int)
@@ -350,6 +357,7 @@ class EpisodeStats:
             self.near_ko_paid            = False
             self.first_strike_paid       = False   # [FIX v14-B] reset per battle
             self.battles_fought         += 1
+            self.global_battles_fought  += 1
             self.battle_idle_steps       = 0
             self.battle_a_presses        = 0
             self.battle_total_a          = 0
@@ -389,6 +397,7 @@ class EpisodeStats:
                 if enemy_hp == 0 and self.last_enemy_hp > 0:
                     vic_bonus += CFG.victory_bonus
                     self.victories += 1
+                    self.global_victories += 1
                     self.post_battle_grace_remaining = CFG.post_battle_grace
                     log.info(
                         f"[Env {env_id}] ★ VICTORY! +{CFG.victory_bonus:.1f}  "

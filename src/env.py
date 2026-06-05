@@ -11,6 +11,7 @@ from src.config import CFG, RAM_SIZE, log, ActionSpace
 from src.reader import RamReader
 from src.advisor import RamAdvisor
 from src.progress import EpisodeStats, RewardAccumulator, get_progress_manager
+from src.vision import VisionEngine, GameState
 
 class PokemonEnv(gym.Env):
     """
@@ -34,6 +35,7 @@ class PokemonEnv(gym.Env):
         self._rewards  = RewardAccumulator()
         self._advisor  = RamAdvisor()
         self._progress = get_progress_manager()
+        self._vision   = VisionEngine()
 
         self._episode_num: int = 0
         self._last_raw_frame: Optional[np.ndarray] = None
@@ -80,8 +82,12 @@ class PokemonEnv(gym.Env):
             RamReader.coord(info, "player_y")  / CFG.max_coord,
             RamReader.map_id(info)             / CFG.max_map_id,
             RamReader.map_bank(info)           / CFG.max_map_id,
-            float(RamReader.in_battle(info)),
-            float(RamReader.script_lock(info)),
+            # Pass 0 for in_battle since we don't have cv_state here easily,
+            # the agent doesn't need to know it's in battle, the environment does.
+            # But let's just pass 0.0 to avoid breaking observation shape.
+            0.0, 
+            # Use RAM for script lock if available, but CV overrides later
+            float(info.get('script_lock', 0)),
             float(RamReader.player_moving(info)),
             RamReader.enemy_hp(info)           / CFG.max_enemy_hp,
             RamReader.party_hp(info)           / CFG.max_party_hp,
@@ -205,12 +211,39 @@ class PokemonEnv(gym.Env):
         return self._build_obs(raw_frame, info), {}
 
     def step(self, action_idx: int):
-        action                   = ActionSpace.get(action_idx)
+        action = ActionSpace.get(action_idx)
+
+        # [FIX v19] Dynamic Battle Curriculum
+        if CFG.enable_battle_curriculum and getattr(self._stats, 'was_in_battle', False):
+            if self._stats.global_win_rate() < CFG.curriculum_win_rate_threshold:
+                action_name = ActionSpace.NAMES[action_idx]
+                if action_name in ["UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT"]:
+                    action = [0] * len(action) # No-Op
+
         raw_frame, pooled, info  = self._run_action(action)
         self._last_raw_frame     = raw_frame
 
-        _in_battle_now  = RamReader.in_battle(info)
-        _script_lock    = bool(RamReader.script_lock(info))
+        # [CV Pipeline] O CV agora exige brilho E pixels pretos (texto HP) para descartar o chão branco do laboratório.
+        # [BALA DE PRATA] Além do CV, validamos se a engine do jogo SAIU do Overworld (gMain_callback2 != 0x80565b5).
+        # Assim, garantimos 100% que o chão branco do laboratório (Overworld) não será confundido com Batalha.
+        cv_state = self._vision.detect_state(raw_frame)
+        
+        # 0x80565b5 = 134571445 (CB2_Overworld)
+        _not_in_overworld = (info.get("gMain_callback2", 0) != 134571445)
+        
+        _in_battle_now = (cv_state == GameState.BATTLE) and _not_in_overworld
+        _is_whiteout   = (cv_state == GameState.WHITEOUT)
+        
+        # O script_lock da RAM costuma ser razoável para travar ações, mas o diálogo visual é mais forte
+        _script_lock   = bool(info.get('script_lock', 0)) or (cv_state == GameState.DIALOGUE)
+        
+        # [USER REQUEST] Salvar print da tela quando iniciar a batalha
+        if _in_battle_now and not getattr(self._stats, 'was_in_battle', False):
+            artifact_dir = "/mnt/c/Users/guilh/.gemini/antigravity/brain/7277d84d-02ea-4c17-85c5-47df9833bc22"
+            img_path = os.path.join(artifact_dir, f"battle_start_env{self.env_id}.png")
+            # raw_frame is RGB, cv2 expects BGR
+            cv2.imwrite(img_path, cv2.cvtColor(raw_frame, cv2.COLOR_RGB2BGR))
+            log.info(f"[Env {self.env_id}] 📸 PRINT DA BATALHA SALVO EM {img_path}")
         
         step_reward = 0.0
         # [FIX v18.2] Suspensão da punição de tempo durante diálogos
@@ -348,6 +381,7 @@ class PokemonEnv(gym.Env):
             env_id=self.env_id,
             episode_num=self._episode_num,
             current_tile=tile,
+            party_level=RamReader.party_level(info),
         )
         step_reward += self._rewards.add("damage", dmg_reward)
 

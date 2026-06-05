@@ -55,10 +55,6 @@ class RamReader:
         return cls._clamp(info.get("map_bank", 0), 0, CFG.max_map_id)
 
     @classmethod
-    def script_lock(cls, info: dict) -> int:
-        return cls._clamp(info.get("script_lock", 0), 0, 1)
-
-    @classmethod
     def player_moving(cls, info: dict) -> int:
         return cls._clamp(info.get("player_moving", 0), 0, 1)
 
@@ -90,10 +86,6 @@ class RamReader:
         return max((info.get(f"e{i}_lvl", 0) for i in range(1, 7)), default=0)
 
     @classmethod
-    def in_battle(cls, info: dict) -> bool:
-        return any(info.get(f"e{i}_hp", 0) > 0 for i in range(1, 7))
-
-    @classmethod
     def badges(cls, info: dict) -> int:
         raw = info.get("badges", 0)
         return cls._clamp(bin(int(raw)).count("1"), 0, 8)
@@ -104,5 +96,4 @@ class RamReader:
             f"[Env {env_id}] {label} | "
             f"x={info.get('player_x','?')} y={info.get('player_y','?')} "
             f"map_bank={info.get('map_bank','?')} map_id={info.get('map_id','?')} | "
-            f"in_battle={RamReader.in_battle(info)} "
         )

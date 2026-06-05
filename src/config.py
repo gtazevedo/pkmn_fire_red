@@ -140,6 +140,11 @@ class Config:
     # O lucro real de batalhar vem do first_strike_bonus.
     first_strike_bonus:       float = 25.0
 
+    # [FIX v19] Dynamic Battle Curriculum (rodinhas de bicicleta)
+    # Bloqueia (NO-OP) direcionais, start e select nas batalhas até bater 10% de win rate.
+    enable_battle_curriculum:      bool  = True
+    curriculum_win_rate_threshold: float = 0.10
+
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
     whiteout_entry_cooldown:   int   = 500

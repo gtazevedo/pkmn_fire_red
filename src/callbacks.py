@@ -443,6 +443,16 @@ class Trainer:
                 stamp_file = CFG.model_path + ".stamp"
                 with open(stamp_file, "w") as f:
                     f.write(CFG.config_stamp)
+                    
+                # [USER REQUEST] Salva um print do ambiente a cada checkpoint para inspeção do Agente "Juiz"
+                try:
+                    import cv2
+                    frames = self._env.get_attr("_last_raw_frame")
+                    if frames and frames[0] is not None:
+                        img_path = "/mnt/c/Users/guilh/.gemini/antigravity/brain/7277d84d-02ea-4c17-85c5-47df9833bc22/checkpoint_latest.png"
+                        cv2.imwrite(img_path, cv2.cvtColor(frames[0], cv2.COLOR_RGB2BGR))
+                except Exception as e:
+                    log.error(f"Failed to save checkpoint screenshot: {e}")
 
                 elapsed_total = time.time() - training_start
                 elapsed_iter  = time.time() - iter_start
