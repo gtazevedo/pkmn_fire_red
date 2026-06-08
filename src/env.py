@@ -163,6 +163,16 @@ class PokemonEnv(gym.Env):
         log.info(f"[Env {self.env_id}] Loading GBA state file: {state_file}")
         with open(state_file, "rb") as f:
             self.env.em.set_state(f.read())
+            
+        # [FIX v20] Evitar glitch de RAM: Inicializar max_event_sum a partir do nome do arquivo
+        try:
+            basename = os.path.basename(state_file)
+            if "events_" in basename:
+                base_flags = int(basename.replace("events_", "").replace(".state", ""))
+            else:
+                base_flags = 0
+        except ValueError:
+            base_flags = 0
 
         # [FIX v11-H] Warmup estável: exige 3 leituras consecutivas iguais de level>0
         raw_frame, info = self._warm_up()
@@ -181,6 +191,9 @@ class PokemonEnv(gym.Env):
 
         RamReader.debug_dump(info, self.env_id, "POST-RESET")
         self._stats.reset(info, ram_array=self.env.get_ram())
+        # [FIX v20] Override max_event_sum com o valor correto do arquivo para evitar +2000 pontos no step 1
+        self._stats.max_event_sum = max(self._stats.max_event_sum, base_flags)
+        
         # [FIX v13-A] Propaga o threshold sorteado para _stats (usado em update_battle)
         self._stats._farm_ratio_threshold = self._farm_ratio_threshold
         self._rewards.reset()
@@ -246,9 +259,10 @@ class PokemonEnv(gym.Env):
             log.info(f"[Env {self.env_id}] 📸 PRINT DA BATALHA SALVO EM {img_path}")
         
         step_reward = 0.0
-        # [FIX v18.2] Suspensão da punição de tempo durante diálogos
-        if not _script_lock:
-            step_reward += self._rewards.add("time_pen", CFG.time_penalty)
+        # [FIX v20] A punição de tempo agora é incondicional.
+        # Ficar em diálogos ("Gary wants to battle") gasta tempo e reduz a recompensa.
+        # Isso ensina o agente a avançar os textos rapidamente.
+        step_reward += self._rewards.add("time_pen", CFG.time_penalty)
         ram_array       = self.env.get_ram()
         text_bonus      = self._advisor.update(_in_battle_now, _script_lock, action_idx, ram_array)
         step_reward    += self._rewards.add("text", text_bonus)
@@ -299,14 +313,14 @@ class PokemonEnv(gym.Env):
                 if steps_since_transition < 150 and all_indoor:
                     self._stairs_loop_count += 1
                     if self._stairs_loop_count >= 3:
-                        penalty = -15.0
-                        step_reward += self._rewards.add("stuck", penalty)
-                        terminated = True
-                        log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP FATAL! 3x repetido. Terminating (penalty {penalty:.1f})")
+                        # penalty = -15.0
+                        # step_reward += self._rewards.add("stuck", penalty)
+                        # terminated = True
+                        log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP 3x repetido. Ignorando.")
                     else:
-                        penalty = -3.0
-                        step_reward += self._rewards.add("stuck", penalty)
-                        log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP DETECTED (A->B->A inside)! Penalty {penalty:.1f} applied.")
+                        # penalty = -3.0
+                        # step_reward += self._rewards.add("stuck", penalty)
+                        log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP DETECTED (A->B->A inside)!")
             else:
                 # Se não for um loop de A->B->A, reseta o contador de loop de escadas consecutivo
                 self._stairs_loop_count = 0

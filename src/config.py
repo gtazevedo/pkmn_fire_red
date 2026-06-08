@@ -20,15 +20,15 @@ class Config:
     pallet_exterior_state_file: str = "./progress_states/pallet_exterior.state"
     # Probabilidade de iniciar do exterior (quando o state existir)
     exterior_start_ratio: float = 0.60
-    model_path:          str = "pokemon_lstm_model"
-    checkpoint_dir:      str = "./checkpoints/"
+    model_path:          str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_lstm_model"
+    checkpoint_dir:      str = "/mnt/d/projects/pkmn_fire_red_saves/checkpoints/"
     progress_dir:        str = "./progress_states/"
-    tensorboard_log_dir: str = "./pokemon_tensorboard/"
-    log_file:            str = "./pokemon_training.log"
-    whiteout_frame_dir:  str = "./whiteout_frames/"
+    tensorboard_log_dir: str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_tensorboard/"
+    log_file:            str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_training.log"
+    whiteout_frame_dir:  str = "/mnt/d/projects/pkmn_fire_red_saves/whiteout_frames/"
 
-    # [FIX v18] config_stamp bumped — exterior save state + calibrated indoor penalty
-    config_stamp:        str = "v18_exterior_state"
+    # [FIX v21] config_stamp bumped — wipe final após remover o exploit de farm de texto e o medo de escadas
+    config_stamp:        str = "v21_final_reset"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
@@ -69,7 +69,8 @@ class Config:
     # [FIX v18.3] Remoção do medo do tempo (Whiddy-style).
     # Como não perdemos mais tempo passivamente, o limite de passos cuida da inércia.
     # [FIX v18.4] Reativado levemente o time_penalty para causar inércia desconfortável e forçar movimento
-    time_penalty:    float = -0.001
+    # [FIX v20] Aumentado para -0.01 para tornar a paralisia insuportável (-100 pontos por episódio se não fizer nada)
+    time_penalty:    float = -0.01
     explore_weight:  float = 1.0
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
@@ -94,7 +95,7 @@ class Config:
     damage_weight:        float = 0.05  # fallback
 
     # [FIX v18.2] victory_bonus aumentado para tornar a batalha mais lucrativa
-    victory_bonus:        float = 50.0
+    victory_bonus:        float = 100.0
     near_ko_bonus:        float = 5.0
     post_battle_grace:    int   = 200
 
@@ -136,9 +137,9 @@ class Config:
     # Soft reset to prevent endless loops, but no harsh punishment
     farm_episode_penalty:     float = 0.0
 
-    # [FIX v18.2] First Strike Bonus: 25.0
+    # [FIX v18.2] First Strike Bonus: 50.0
     # O lucro real de batalhar vem do first_strike_bonus.
-    first_strike_bonus:       float = 25.0
+    first_strike_bonus:       float = 50.0
 
     # [FIX v19] Dynamic Battle Curriculum (rodinhas de bicicleta)
     # Bloqueia (NO-OP) direcionais, start e select nas batalhas até bater 10% de win rate.
@@ -148,21 +149,20 @@ class Config:
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
     whiteout_entry_cooldown:   int   = 500
-    levelup_weight:       float = 15.0
+    levelup_weight:       float = 30.0
     badge_weight:         float = 50.0
     milestone_weight:     float = 10.0
     stuck_threshold:      int   = 150
     stuck_penalty:        float = 0.0
 
     # North bonus (y decresce ao ir para norte no FireRed)
-    # [FIX v17] Aumentado de 1.0 -> 2.5: norte é o caminho do lab, deve ser irresistível
-    # [FIX v18.4] Bônus direcional dobrado para forçar ativamente o PPO a cruzar a rota em direção a Viridian
-    north_bonus_per_tile: float = 5.0
+    # [FIX v19] Reduzido drasticamente para 0.5 para não ser explorado no lugar de batalhas
+    north_bonus_per_tile: float = 0.5
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
     # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
     map_explore_cap_interior: float = 25.0   # bank=4 (quartos, casas) — esgota rápido
-    map_explore_cap_exterior: float = 2000.0 # bank!=4 (ruas, rotas) — expandido enormemente para cobrir toda a Rota 1
+    map_explore_cap_exterior: float = 100.0  # bank!=4 reduzido para priorizar batalhas
 
     outdoor_sustain_bonus: float = 0.0
 
@@ -173,11 +173,9 @@ class Config:
     # [FIX v17] Removido: map_explore_cap (substituído por caps diferenciados)
     # [FIX v17] Removido: map_chain_bonus (north_bonus já dá direção clara)
 
-    # [FIX v18] Penalidade interior muito pequena e calibrada:
-    # - 600 steps dentro = -3.0 máximo
+    # [FIX v18] Penalidade interior calibrada para evitar ociosidade no laboratório:
     # - Sair para Pallet Town = +30.0 new_map_bonus
-    # - Net ao sair: +27.0 positivo mesmo após penalidade máxima
-    indoor_step_penalty: float = 0.0
+    indoor_step_penalty: float = -0.01
 
     # --- RAM sanity caps ---
     max_party_level_sum: int = 600
