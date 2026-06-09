@@ -3,9 +3,8 @@ import logging
 import numpy as np
 from dataclasses import dataclass
 import retro
-# [FIX v13-F] RAM obs expandido: 12 base + 5 situation embedding
-# + 1 battle_idle_ratio + 1 battle_outcome_potential + 1 steps_in_battle_norm = 20
-RAM_SIZE = 12 + 5 + 3   # = 20
+# [FIX v22] RAM obs expandido: +3 para Sixth Sense (potions, tms, p1_status) = 23
+RAM_SIZE = 12 + 5 + 3 + 3   # = 23
 
 @dataclass(frozen=True)
 class Config:
@@ -27,8 +26,8 @@ class Config:
     log_file:            str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_training.log"
     whiteout_frame_dir:  str = "/mnt/d/projects/pkmn_fire_red_saves/whiteout_frames/"
 
-    # [FIX v21] config_stamp bumped — wipe final após remover o exploit de farm de texto e o medo de escadas
-    config_stamp:        str = "v21_final_reset"
+    # [FIX v22] config_stamp bumped — wipe final para plugar o Sexto Sentido (Inventário/Status)
+    config_stamp:        str = "v22_sixth_sense_wipe"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
@@ -204,7 +203,7 @@ def setup_logging() -> logging.Logger:
 log = setup_logging()
 
 class ActionSpace:
-    NAMES = ["A", "B", "UP", "DOWN", "LEFT", "RIGHT"]
+    NAMES = ["A", "B", "UP", "DOWN", "LEFT", "RIGHT", "TACTICAL_MACRO"]
 
     _ACTIONS = [
         np.array([0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]),  # A
@@ -213,6 +212,7 @@ class ActionSpace:
         np.array([0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]),  # DOWN
         np.array([0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0]),  # LEFT
         np.array([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]),  # RIGHT
+        np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),  # TACTICAL_MACRO (No-op para o emulador)
     ]
 
     NO_OP: list = [0] * 12

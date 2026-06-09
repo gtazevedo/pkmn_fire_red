@@ -10,11 +10,8 @@ class RamReader:
         return cls._clamp(info.get(key, 0), 0, CFG.max_coord)
 
     @classmethod
-    def event_flags_sum(cls, ram_array) -> int:
-        """
-        Lê dinamicamente o gSaveBlock1Ptr no IRAM (0x03005008) para encontrar o SaveBlock1 no WRAM.
-        A partir daí, lê o bloco de Event Flags (offset 0x0EE0) e soma todos os bits ligados.
-        """
+    def get_saveblock1_ptr(cls, ram_array) -> int:
+        """Retorna o offset do SaveBlock1 na WRAM"""
         if ram_array is None:
             return 0
         
@@ -30,7 +27,17 @@ class RamReader:
         if (ptr_val >> 24) != 0x02:
             return 0
             
-        wram_offset = ptr_val & 0x00FFFFFF
+        return ptr_val & 0x00FFFFFF
+
+    @classmethod
+    def event_flags_sum(cls, ram_array) -> int:
+        """
+        Lê o bloco de Event Flags (offset 0x0EE0) e soma todos os bits ligados.
+        """
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        if wram_offset == 0:
+            return 0
+            
         flags_start = wram_offset + 0x0EE0
         flags_end = wram_offset + 0x1000
         
@@ -45,6 +52,52 @@ class RamReader:
             total_flags += byte.bit_count()
             
         return total_flags
+
+    @classmethod
+    def get_potions_count(cls, ram_array) -> int:
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        if wram_offset == 0: return 0
+        items_start = wram_offset + 0x02B8
+        if len(ram_array) <= items_start + (42 * 4): return 0
+        
+        total_potions = 0
+        for i in range(42):
+            idx = items_start + i * 4
+            item_id = int(ram_array[idx]) | (int(ram_array[idx+1]) << 8)
+            item_qty = int(ram_array[idx+2]) | (int(ram_array[idx+3]) << 8)
+            if item_id == 13: # 13 = Potion no Fire Red
+                total_potions += item_qty
+        return total_potions
+
+    @classmethod
+    def get_tms_count(cls, ram_array) -> int:
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        if wram_offset == 0: return 0
+        tms_start = wram_offset + 0x040C
+        if len(ram_array) <= tms_start + (58 * 4): return 0
+        
+        total_tms = 0
+        for i in range(58):
+            idx = tms_start + i * 4
+            item_id = int(ram_array[idx]) | (int(ram_array[idx+1]) << 8)
+            item_qty = int(ram_array[idx+2]) | (int(ram_array[idx+3]) << 8)
+            if item_id != 0 and item_qty > 0:
+                total_tms += item_qty
+        return total_tms
+
+    @classmethod
+    def get_p1_status(cls, ram_array) -> int:
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        if wram_offset == 0: return 0
+        # Pokemon 1 começa no offset 0x0294. Status está no byte 80 da struct (0x50).
+        status_start = wram_offset + 0x0294 + 80
+        if len(ram_array) <= status_start + 3: return 0
+        
+        b1, b2, b3, b4 = int(ram_array[status_start]), int(ram_array[status_start+1]), int(ram_array[status_start+2]), int(ram_array[status_start+3])
+        status_val = b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)
+        
+        # Se for > 0, tem alguma condição negativa (Poison, Paralyze, Sleep, etc)
+        return 1 if status_val > 0 else 0
 
     @classmethod
     def map_id(cls, info: dict) -> int:

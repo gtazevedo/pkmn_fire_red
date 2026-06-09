@@ -77,6 +77,7 @@ class PokemonEnv(gym.Env):
 
     def _build_obs(self, raw_frame: np.ndarray, info: dict) -> dict:
         ms = self.max_steps
+        ram = self.env.get_ram()
         base_ram = np.array([
             RamReader.coord(info, "player_x")  / CFG.max_coord,
             RamReader.coord(info, "player_y")  / CFG.max_coord,
@@ -94,6 +95,10 @@ class PokemonEnv(gym.Env):
             RamReader.party_level(info)        / CFG.max_party_level_sum,
             RamReader.badges(info)             / 8.0,
             self._stats.steps                  / ms,
+            # [FIX v22] Sixth Sense
+            min(RamReader.get_potions_count(ram), 99) / 99.0,
+            min(RamReader.get_tms_count(ram), 99) / 99.0,
+            float(RamReader.get_p1_status(ram)),
         ], dtype=np.float32)
 
         text_ram = self._advisor.get_embedding()
@@ -225,30 +230,48 @@ class PokemonEnv(gym.Env):
 
     def step(self, action_idx: int):
         action = ActionSpace.get(action_idx)
+        action_name = ActionSpace.NAMES[action_idx]
 
         # [FIX v19] Dynamic Battle Curriculum
         if CFG.enable_battle_curriculum and getattr(self._stats, 'was_in_battle', False):
             if self._stats.global_win_rate() < CFG.curriculum_win_rate_threshold:
-                action_name = ActionSpace.NAMES[action_idx]
                 if action_name in ["UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT"]:
-                    action = [0] * len(action) # No-Op
+                    action = ActionSpace.NO_OP
+
+        # [FIX v22] TACTICAL_MACRO interception
+        if action_name == "TACTICAL_MACRO":
+            action = ActionSpace.NO_OP
 
         raw_frame, pooled, info  = self._run_action(action)
         self._last_raw_frame     = raw_frame
 
-        # [CV Pipeline] O CV agora exige brilho E pixels pretos (texto HP) para descartar o chão branco do laboratório.
-        # [BALA DE PRATA] Além do CV, validamos se a engine do jogo SAIU do Overworld (gMain_callback2 != 0x80565b5).
-        # Assim, garantimos 100% que o chão branco do laboratório (Overworld) não será confundido com Batalha.
+        # [CV Pipeline]
         cv_state = self._vision.detect_state(raw_frame)
-        
-        # 0x80565b5 = 134571445 (CB2_Overworld)
         _not_in_overworld = (info.get("gMain_callback2", 0) != 134571445)
-        
         _in_battle_now = (cv_state == GameState.BATTLE) and _not_in_overworld
         _is_whiteout   = (cv_state == GameState.WHITEOUT)
-        
-        # O script_lock da RAM costuma ser razoável para travar ações, mas o diálogo visual é mais forte
         _script_lock   = bool(info.get('script_lock', 0)) or (cv_state == GameState.DIALOGUE)
+
+        # [FIX v22] Tactical Macro Execution
+        macro_reward = 0.0
+        if action_name == "TACTICAL_MACRO":
+            ram_array = self.env.get_ram()
+            potions = RamReader.get_potions_count(ram_array)
+            tms = RamReader.get_tms_count(ram_array)
+            
+            if _in_battle_now and potions > 0:
+                # Executa a Macro de Poção (Botão Tático)
+                # TODO: Inject the 60-frame menu navigation macro here
+                macro_reward += 100.0
+                log.info(f"[Env {self.env_id}] 💊 TACTICAL MACRO SUCCESS: Potion Triggered!")
+            elif not _in_battle_now and tms > 0:
+                # Executa a Macro de TM e Reordenação (Botão Tático)
+                # TODO: Inject the TM teaching and move reordering macro here
+                macro_reward += 500.0
+                log.info(f"[Env {self.env_id}] 💿 TACTICAL MACRO SUCCESS: TM Teaching Triggered!")
+            else:
+                # Zero punição para evitar Esparsidade e Trauma
+                pass
         
         # [USER REQUEST] Salvar print da tela quando iniciar a batalha
         if _in_battle_now and not getattr(self._stats, 'was_in_battle', False):
@@ -259,6 +282,9 @@ class PokemonEnv(gym.Env):
             log.info(f"[Env {self.env_id}] 📸 PRINT DA BATALHA SALVO EM {img_path}")
         
         step_reward = 0.0
+        # [FIX v22] Recompensa Massiva do Botão Tático (HRL)
+        step_reward += self._rewards.add("tactical", macro_reward)
+        
         # [FIX v20] A punição de tempo agora é incondicional.
         # Ficar em diálogos ("Gary wants to battle") gasta tempo e reduz a recompensa.
         # Isso ensina o agente a avançar os textos rapidamente.

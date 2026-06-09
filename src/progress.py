@@ -107,6 +107,7 @@ class RewardAccumulator:
     idle_pen:  float = 0.0
     op_lvl:    float = 0.0
     heal:      float = 0.0
+    tactical:  float = 0.0
 
     def add(self, component: str, value: float) -> float:
         setattr(self, component, getattr(self, component) + value)
@@ -116,7 +117,7 @@ class RewardAccumulator:
     def reset(self) -> None:
         self.total = self.explore = self.map_disc = self.damage = 0.0
         self.levelup = self.badge = self.stuck = self.time_pen = self.text = self.entry = self.milestone = 0.0
-        self.victory = self.idle_pen = self.op_lvl = self.heal = 0.0
+        self.victory = self.idle_pen = self.op_lvl = self.heal = self.tactical = 0.0
 
     def to_dict(self) -> dict:
         return {
