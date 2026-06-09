@@ -75,7 +75,7 @@ class Config:
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
     max_op_level_reward_scale: float = 0.2
-    heal_reward_scale:         float = 4.0
+    heal_reward_scale:         float = 8.0
     # Quando o agente esgotar os tiles do mapa, ele ganha uma punição de tempo leve
     max_explore_reward_per_map: float = 150.0
     stale_map_penalty:          float = 0.0
@@ -94,8 +94,8 @@ class Config:
     hp_pct_scale:         float = 15.0
     damage_weight:        float = 0.05  # fallback
 
-    # [FIX v18.2] victory_bonus aumentado para tornar a batalha mais lucrativa
-    victory_bonus:        float = 100.0
+    # [FIX v18.2] victory_bonus reduzido para 25.0 para nerfar farm de matinho
+    victory_bonus:        float = 25.0
     near_ko_bonus:        float = 5.0
     post_battle_grace:    int   = 200
 
@@ -137,9 +137,9 @@ class Config:
     # Soft reset to prevent endless loops, but no harsh punishment
     farm_episode_penalty:     float = 0.0
 
-    # [FIX v18.2] First Strike Bonus: 50.0
+    # [FIX v18.2] First Strike Bonus: reduzido para 12.0 para nerfar farm de matinho
     # O lucro real de batalhar vem do first_strike_bonus.
-    first_strike_bonus:       float = 50.0
+    first_strike_bonus:       float = 12.0
 
     # [FIX v19] Dynamic Battle Curriculum (rodinhas de bicicleta)
     # Bloqueia (NO-OP) direcionais, start e select nas batalhas até bater 10% de win rate.
@@ -149,7 +149,7 @@ class Config:
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
     whiteout_entry_cooldown:   int   = 500
-    levelup_weight:       float = 30.0
+    levelup_weight:       float = 40.0
     badge_weight:         float = 50.0
     milestone_weight:     float = 10.0
     stuck_threshold:      int   = 150

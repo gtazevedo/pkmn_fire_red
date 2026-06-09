@@ -271,8 +271,8 @@ class EpisodeStats:
         if total_flags > self.max_event_sum:
             diff = total_flags - self.max_event_sum
             self.max_event_sum = total_flags
-            # Peso de 20.0 por cada flag nova descoberta
-            return diff * 20.0, total_flags
+            # Peso de 40.0 por cada flag nova descoberta
+            return diff * 40.0, total_flags
         return 0.0, total_flags
 
     def update_exploration(self, tile: tuple, map_key: tuple) -> tuple[float, bool]:
@@ -395,12 +395,14 @@ class EpisodeStats:
                     self.near_ko_paid = True
 
                 if enemy_hp == 0 and self.last_enemy_hp > 0:
-                    vic_bonus += CFG.victory_bonus
+                    fatigue = 0.5 ** max(0, self.battles_fought - 1)
+                    actual_vic_bonus = CFG.victory_bonus * fatigue
+                    vic_bonus += actual_vic_bonus
                     self.victories += 1
                     self.global_victories += 1
                     self.post_battle_grace_remaining = CFG.post_battle_grace
                     log.info(
-                        f"[Env {env_id}] ★ VICTORY! +{CFG.victory_bonus:.1f}  "
+                        f"[Env {env_id}] ★ VICTORY! +{actual_vic_bonus:.1f} (fatigue={fatigue:.2f}) "
                         f"post_battle_grace={CFG.post_battle_grace} steps"
                     )
             else:
@@ -434,6 +436,17 @@ class EpisodeStats:
                         )
 
         elif self.was_in_battle:
+            if enemy_hp == 0 and self.last_enemy_hp > 0:
+                fatigue = 0.5 ** max(0, self.battles_fought - 1)
+                actual_vic_bonus = CFG.victory_bonus * fatigue
+                vic_bonus += actual_vic_bonus
+                self.victories += 1
+                self.global_victories += 1
+                self.post_battle_grace_remaining = CFG.post_battle_grace
+                log.info(
+                    f"[Env {env_id}] ★ LATE VICTORY! +{actual_vic_bonus:.1f} (fatigue={fatigue:.2f}) "
+                )
+
             self.battle_idle_steps        = 0
             self.battle_outcome_potential = 0.0
             self.steps_in_battle_current  = 0   # [FIX v13-F]

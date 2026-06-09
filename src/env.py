@@ -418,10 +418,13 @@ class PokemonEnv(gym.Env):
             step_reward += self._rewards.add("entry", actual_entry)
             log.debug(f"[Env {self.env_id}] Battle entered! +{actual_entry:.1f} entry bonus")
 
-        if dmg_reward > 0.0 and not self._stats.first_strike_paid:
+        # [FIX v14-B] First Strike Reward
+        if _in_battle_now and self._stats.battle_damage_total > 0 and not getattr(self._stats, 'first_strike_paid', False):
             self._stats.first_strike_paid = True
-            step_reward += self._rewards.add("damage", CFG.first_strike_bonus)
-            log.debug(f"[Env {self.env_id}] FIRST STRIKE! +{CFG.first_strike_bonus:.1f}")
+            fatigue = 0.5 ** max(0, self._stats.battles_fought - 1)
+            actual_first_strike = CFG.first_strike_bonus * fatigue
+            step_reward += self._rewards.add("damage", actual_first_strike)
+            log.info(f"[Env {self.env_id}] First Strike! +{actual_first_strike:.1f} (fatigue={fatigue:.2f})")
 
         if _in_battle_now:
             step_reward += self._rewards.add("text", CFG.battle_sustain_bonus)
