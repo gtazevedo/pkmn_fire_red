@@ -132,6 +132,86 @@ class PokemonEnv(gym.Env):
             obs, _, _, _, info = self.env.step(ActionSpace.NO_OP)
         return obs, info
 
+    def _run_potion_macro(self):
+        B_A     = np.array([0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0])
+        B_UP    = np.array([0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+        B_LEFT  = np.array([0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0])
+        B_RIGHT = np.array([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0])
+        B_NOOP  = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+
+        def press(action, hold=5, delay=15):
+            for _ in range(hold):
+                self.env.step(action)
+            for _ in range(delay):
+                self.env.step(B_NOOP)
+
+        log.info(f"[Env {self.env_id}] 🤖 Executing Potion Macro (Robotic Arm)...")
+        # In battle, to select BAG: UP and LEFT to guarantee cursor is on FIGHT, then RIGHT to BAG.
+        press(B_UP, hold=5, delay=5)
+        press(B_LEFT, hold=5, delay=5)
+        press(B_RIGHT, hold=5, delay=5)
+        press(B_A, hold=5, delay=30)    # Open BAG
+        
+        # Select Potion (Assuming it is the first item in the Items pocket)
+        press(B_A, hold=5, delay=20)
+        
+        # Select USE
+        press(B_A, hold=5, delay=20)
+        
+        # Select Party Pokemon 1
+        press(B_A, hold=5, delay=40)
+        
+        # Text animation plays
+        log.info(f"[Env {self.env_id}] 🤖 Potion Macro completed.")
+
+    def _run_tm_macro(self):
+        B_A     = np.array([0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0])
+        B_B     = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        B_START = np.array([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+        B_UP    = np.array([0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+        B_DOWN  = np.array([0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+        B_RIGHT = np.array([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0])
+        B_NOOP  = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+
+        def press(action, hold=5, delay=15):
+            for _ in range(hold):
+                self.env.step(action)
+            for _ in range(delay):
+                self.env.step(B_NOOP)
+
+        log.info(f"[Env {self.env_id}] 🤖 Executing TM Macro (Robotic Arm)...")
+        # 1. Open Start Menu
+        press(B_START, hold=5, delay=20)
+        
+        # 2. Go to Bag (From Start Menu default, push UP a lot to reach Pokedex, then DOWN to Bag)
+        for _ in range(5): press(B_UP, hold=5, delay=5)
+        press(B_DOWN, hold=5, delay=5)
+        press(B_DOWN, hold=5, delay=5)
+        press(B_A, hold=5, delay=30) # Open Bag
+        
+        # 3. Go to TM/HM Pocket (3 times RIGHT)
+        for _ in range(3): press(B_RIGHT, hold=5, delay=15)
+        
+        # 4. Select first TM and Use
+        press(B_A, hold=5, delay=20)
+        press(B_A, hold=5, delay=20)
+        
+        # 5. Select Party Pokemon 1
+        press(B_A, hold=5, delay=40)
+        
+        # 6. Confirm "Teach?" (Press A)
+        press(B_A, hold=5, delay=60)
+        
+        # 7. Mash A to get through text ("Learned move!", or "Forget move?")
+        for _ in range(15): press(B_A, hold=5, delay=25)
+        
+        # 8. Reorder Move (Not trivial without knowing if it forgot. We will skip complex reordering for now)
+        # We mash B a few times to exit the bag and return to the overworld safely.
+        for _ in range(5): press(B_B, hold=5, delay=20)
+        
+        log.info(f"[Env {self.env_id}] 🤖 TM Macro completed.")
+
+
     def _run_action(self, action: np.ndarray) -> tuple:
         total   = CFG.frames_held + CFG.frames_noop
         frames  = []
@@ -261,17 +341,17 @@ class PokemonEnv(gym.Env):
             
             if _in_battle_now and potions > 0:
                 # Executa a Macro de Poção (Botão Tático)
-                # TODO: Inject the 60-frame menu navigation macro here
+                self._run_potion_macro()
                 macro_reward += 100.0
                 log.info(f"[Env {self.env_id}] 💊 TACTICAL MACRO SUCCESS: Potion Triggered!")
             elif not _in_battle_now and tms > 0:
                 # Executa a Macro de TM e Reordenação (Botão Tático)
-                # TODO: Inject the TM teaching and move reordering macro here
+                self._run_tm_macro()
                 macro_reward += 500.0
                 log.info(f"[Env {self.env_id}] 💿 TACTICAL MACRO SUCCESS: TM Teaching Triggered!")
             else:
-                # Zero punição para evitar Esparsidade e Trauma
-                pass
+                # [FIX v23] Punição leve para queimar a mão do agente se ele spammar o botão no vazio
+                macro_reward -= 0.05
         
         # [USER REQUEST] Salvar print da tela quando iniciar a batalha
         if _in_battle_now and not getattr(self._stats, 'was_in_battle', False):

@@ -5,8 +5,8 @@ class RamAdvisor:
     Advisor baseado em flags de RAM e decodificação do buffer de diálogo de EWRAM (0x02021D18).
     Upgrade robusto para leitura direta de texto e classificação avançada de menus.
     """
-
-    DIALOG_BONUS      = 0.15
+    # [FIX v25] Zerado para evitar o exploit do agente farmando placas de diálogo
+    DIALOG_BONUS      = 0.0
     YES_NO_BONUS      = 0.25   # Recompensar B em prompts de YES/NO (evita loops infinitos de diálogo/saves)
     LEVEL_UP_BONUS    = 0.10   # Recompensar A em telas de Level Up
     HEAL_BONUS        = 0.20   # Recompensar A em telas de cura no Centro Pokémon

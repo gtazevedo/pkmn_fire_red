@@ -26,8 +26,8 @@ class Config:
     log_file:            str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_training.log"
     whiteout_frame_dir:  str = "/mnt/d/projects/pkmn_fire_red_saves/whiteout_frames/"
 
-    # [FIX v22] config_stamp bumped — wipe final para plugar o Sexto Sentido (Inventário/Status)
-    config_stamp:        str = "v22_sixth_sense_wipe"
+    # [FIX v26] config_stamp bumped — Redesign Whiddy-Pure (ver DESIGN_GUIDELINES.md)
+    config_stamp:        str = "v26_whiddy_pure"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
@@ -68,9 +68,10 @@ class Config:
     # [FIX v18.3] Remoção do medo do tempo (Whiddy-style).
     # Como não perdemos mais tempo passivamente, o limite de passos cuida da inércia.
     # [FIX v18.4] Reativado levemente o time_penalty para causar inércia desconfortável e forçar movimento
-    # [FIX v20] Aumentado para -0.01 para tornar a paralisia insuportável (-100 pontos por episódio se não fizer nada)
-    time_penalty:    float = -0.01
-    explore_weight:  float = 1.0
+    # [FIX v24] Zerado o time_penalty para devolver a curiosidade infantil ao agente
+    time_penalty:    float = 0.0
+    # [FIX v26] Whiddy-Pure: explore_weight é a ÚNICA fonte primária de dopamina
+    explore_weight:  float = 3.0
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
     max_op_level_reward_scale: float = 0.2
@@ -79,10 +80,9 @@ class Config:
     max_explore_reward_per_map: float = 150.0
     stale_map_penalty:          float = 0.0
 
-    # [FIX v11-I] new_map_bonus 20→30 para cidades/dungeons (bank≠4)
-    # bank=4 routes já têm north_bonus contínuo; cidades merecem mais.
-    new_map_bonus:        float = 30.0
-    new_map_bonus_route:  float = 10.0  # bank=4 (Routes): menos bônus, north_bonus compensa
+    # [FIX v26] Whiddy-Pure: zerado new_map_bonus (causava exploit de +60 grátis no spawn)
+    new_map_bonus:        float = 0.0
+    new_map_bonus_route:  float = 0.0
 
     # [FIX v15] battle_idle_penalty: -0.05 → -0.01, grace: 120 → 200
     # Punições muito altas geravam fobia de batalhas e colapso na grama.
@@ -154,9 +154,8 @@ class Config:
     stuck_threshold:      int   = 150
     stuck_penalty:        float = 0.0
 
-    # North bonus (y decresce ao ir para norte no FireRed)
-    # [FIX v19] Reduzido drasticamente para 0.5 para não ser explorado no lugar de batalhas
-    north_bonus_per_tile: float = 0.5
+    # [FIX v26] Whiddy-Pure: zerado north_bonus (redundante com explore_weight=3.0)
+    north_bonus_per_tile: float = 0.0
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
     # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
@@ -173,8 +172,8 @@ class Config:
     # [FIX v17] Removido: map_chain_bonus (north_bonus já dá direção clara)
 
     # [FIX v18] Penalidade interior calibrada para evitar ociosidade no laboratório:
-    # - Sair para Pallet Town = +30.0 new_map_bonus
-    indoor_step_penalty: float = -0.01
+    # [FIX v24] Zerado o indoor_step_penalty para parar de punir o bebê por tentar andar na parede
+    indoor_step_penalty: float = 0.0
 
     # --- RAM sanity caps ---
     max_party_level_sum: int = 600
