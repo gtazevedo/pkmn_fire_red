@@ -26,8 +26,8 @@ class Config:
     log_file:            str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_training.log"
     whiteout_frame_dir:  str = "/mnt/d/projects/pkmn_fire_red_saves/whiteout_frames/"
 
-    # [FIX v26] config_stamp bumped — Redesign Whiddy-Pure (ver DESIGN_GUIDELINES.md)
-    config_stamp:        str = "v26_whiddy_pure"
+    # [FIX v26b] config_stamp bumped — Fix do bypass hardcoded de +0.5 no advisor.py
+    config_stamp:        str = "v26b_dialog_bypass_fix"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"

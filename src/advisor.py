@@ -195,7 +195,8 @@ class RamAdvisor:
             bonus = self.HEAL_BONUS
         elif situation == self.SIT_DIALOG:
             rec_action = self.A_IDX
-            bonus = 0.5 if text_changed else 0.0  # +0.5 apenas se o texto avançou!
+            # [FIX v26] Usa DIALOG_BONUS em vez de 0.5 hardcoded (era o exploit da placa)
+            bonus = self.DIALOG_BONUS if text_changed else 0.0
         elif situation == self.SIT_BATTLE:
             rec_action = self.A_IDX
             bonus = self.BATTLE_BONUS
