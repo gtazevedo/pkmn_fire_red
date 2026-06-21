@@ -25,8 +25,14 @@ class ProgressManager:
     @property
     def current_state_file(self) -> str:
         import random
-        # Sorteia um state do pool descoberto. Dá leve preferência pros states mais avançados?
-        # Para simplificar: sorteio uniforme para manter exploração ampla.
+        if len(self._saved_states) <= 3:
+            return random.choice(self._saved_states)
+        # [FIX v27] Currículo enviesado: 70% nos top-3 states avançados
+        # para maximizar tentativas a partir de posições promissoras.
+        # 30% em qualquer state para manter diversidade.
+        sorted_states = sorted(self._saved_states, key=self._state_sort_key, reverse=True)
+        if random.random() < 0.70:
+            return random.choice(sorted_states[:3])
         return random.choice(self._saved_states)
 
     def check_and_save(self, emulator, total_flags: int, env_id: int) -> float:
@@ -52,6 +58,21 @@ class ProgressManager:
             except Exception as e:
                 log.warning(f"[Env {env_id}] Falha ao salvar state de flag: {e}")
         return 0.0
+
+    @staticmethod
+    def _state_sort_key(path: str) -> int:
+        """Extrai o número de flags do nome do arquivo para ordenação."""
+        import os
+        basename = os.path.basename(path)
+        try:
+            if "events_" in basename:
+                return int(basename.replace("events_", "").replace(".state", ""))
+        except ValueError:
+            pass
+        # Start.state e pallet_exterior → prioridade baixa
+        if "pallet_exterior" in basename:
+            return 1
+        return 0
 
     def _state_path(self, total_flags: int) -> str:
         return os.path.join(CFG.progress_dir, f"events_{total_flags:03d}.state")
@@ -299,10 +320,21 @@ class EpisodeStats:
         if not hasattr(self, 'explore_rewards_per_map'):
             self.explore_rewards_per_map = defaultdict(float)
 
-        # [FIX v18.2] Regras estritas de exploração
-        # 1. Bônus apenas na PRIMEIRA vez que pisa no tile (naquele episódio)
+        # [FIX v27] Decaimento logarítmico de exploração + outdoor bonus
+        # Tiles novos neste episódio recebem reward, mas com decaimento
+        # baseado em quantas vezes já foram visitados historicamente.
+        # Tiles realmente inéditos → 100%. Tiles velhos → progressivamente menos.
         if self.tile_visits[tile] == 1:
-            base_r = CFG.explore_weight
+            n_persistent = self.persistent_tile_visits[tile]
+            # log1p(0)=0 → factor=1.0 (tile inédito: reward cheio)
+            # log1p(10)≈2.4 → factor≈0.29
+            # log1p(50)≈3.9 → factor≈0.20
+            # log1p(100)≈4.6 → factor≈0.18
+            novelty_factor = 1.0 / (1.0 + math.log1p(n_persistent))
+            base_r = CFG.explore_weight * novelty_factor
+            # Bônus extra para tiles em mapas exteriores (routes com grama)
+            if map_key[0] == 3:  # bank=3 = exterior/routes
+                base_r += CFG.explore_weight_outdoor_bonus * novelty_factor
         else:
             base_r = 0.0
 

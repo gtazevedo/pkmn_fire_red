@@ -56,7 +56,9 @@ class Config:
     max_steps_p2: int = 10_000
     # [FIX v15] max_steps_p3 20_000→10_000: episódios muito longos permitiam
     # farm de exploração e enrolação do agente.
-    max_steps_p3: int = 10_000
+    # [FIX v27] Reduzido de 10k para 4k: episódios longos demais permitem
+    # ao agente "enrolar" com R≈80 sem explorar. Mais curtos = mais resets = mais variedade.
+    max_steps_p3: int = 4_000
 
     # --- frame skip ---
     frames_held: int = 6
@@ -72,6 +74,9 @@ class Config:
     time_penalty:    float = 0.0
     # [FIX v26] Whiddy-Pure: explore_weight é a ÚNICA fonte primária de dopamina
     explore_weight:  float = 3.0
+    # [FIX v27] Bônus extra por tile novo em mapas exteriores (bank=3, routes)
+    # Torna o exterior ~50% mais lucrativo que o interior sem punir estar dentro.
+    explore_weight_outdoor_bonus: float = 1.5
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
     max_op_level_reward_scale: float = 0.2
@@ -152,15 +157,15 @@ class Config:
     badge_weight:         float = 50.0
     milestone_weight:     float = 10.0
     stuck_threshold:      int   = 150
-    stuck_penalty:        float = 0.0
+    stuck_penalty:        float = -0.01
 
     # [FIX v26] Whiddy-Pure: zerado north_bonus (redundante com explore_weight=3.0)
     north_bonus_per_tile: float = 0.0
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
     # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
-    map_explore_cap_interior: float = 25.0   # bank=4 (quartos, casas) — esgota rápido
-    map_explore_cap_exterior: float = 100.0  # bank!=4 reduzido para priorizar batalhas
+    map_explore_cap_interior: float = 10.0   # bank=4 (quartos, casas) — esgota rápido
+    map_explore_cap_exterior: float = 300.0  # bank!=4 exterior expandido para mais exploração
 
     outdoor_sustain_bonus: float = 0.0
 
@@ -172,8 +177,8 @@ class Config:
     # [FIX v17] Removido: map_chain_bonus (north_bonus já dá direção clara)
 
     # [FIX v18] Penalidade interior calibrada para evitar ociosidade no laboratório:
-    # [FIX v24] Zerado o indoor_step_penalty para parar de punir o bebê por tentar andar na parede
-    indoor_step_penalty: float = 0.0
+    # [FIX v27b] Reativado indoor_step_penalty (-0.005) para forçar o agente a sair de casa (Quebra de Platô)
+    indoor_step_penalty: float = -0.005
 
     # --- RAM sanity caps ---
     max_party_level_sum: int = 600
