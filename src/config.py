@@ -157,7 +157,7 @@ class Config:
     badge_weight:         float = 50.0
     milestone_weight:     float = 10.0
     stuck_threshold:      int   = 150
-    stuck_penalty:        float = -0.01
+    stuck_penalty:        float = 0.0
 
     # [FIX v26] Whiddy-Pure: zerado north_bonus (redundante com explore_weight=3.0)
     north_bonus_per_tile: float = 0.0
@@ -177,8 +177,9 @@ class Config:
     # [FIX v17] Removido: map_chain_bonus (north_bonus já dá direção clara)
 
     # [FIX v18] Penalidade interior calibrada para evitar ociosidade no laboratório:
-    # [FIX v27b] Reativado indoor_step_penalty (-0.005) para forçar o agente a sair de casa (Quebra de Platô)
-    indoor_step_penalty: float = -0.005
+    # [FIX v28] Early Stopping substitui punição: se não achar a porta, o episódio
+    # simplesmente encerra mais cedo. Zero de punição contínua para proteger a curva.
+    indoor_step_penalty: float = 0.0
 
     # --- RAM sanity caps ---
     max_party_level_sum: int = 600

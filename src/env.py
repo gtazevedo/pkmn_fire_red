@@ -419,10 +419,9 @@ class PokemonEnv(gym.Env):
                 if steps_since_transition < 150 and all_indoor:
                     self._stairs_loop_count += 1
                     if self._stairs_loop_count >= 3:
-                        # penalty = -15.0
-                        # step_reward += self._rewards.add("stuck", penalty)
-                        # terminated = True
-                        log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP 3x repetido. Ignorando.")
+                        # [FIX v28] Early Stop em vez de punição para proteger a curva de aprendizado
+                        log.info(f"[Env {self.env_id}] 🚨 STAIRS LOOP 3x repetido. Early Stop!")
+                        terminated = True
                     else:
                         # penalty = -3.0
                         # step_reward += self._rewards.add("stuck", penalty)
@@ -487,10 +486,13 @@ class PokemonEnv(gym.Env):
             self._rewards.add("map_disc", CFG.new_map_bonus if map_bank != 4 else CFG.new_map_bonus_route)
             log.info(f"[Env {self.env_id}] New map: bank={map_key[0]} id={map_key[1]}")
 
-        step_reward += self._rewards.add(
-            "stuck",
-            self._stats.update_stuck(in_battle=_in_battle_now, script_lock=_script_lock)
-        )
+        stuck_pen = self._stats.update_stuck(in_battle=_in_battle_now, script_lock=_script_lock)
+        step_reward += self._rewards.add("stuck", stuck_pen)
+        
+        # [FIX v28] Early Stop por inatividade em vez de ficar drenando a Value Network com punição.
+        if self._stats.steps_on_cur_tile >= CFG.stuck_threshold and not (_in_battle_now or _script_lock):
+            log.info(f"[Env {self.env_id}] 🚨 STUCK (parado na mesma coordenada). Early Stop!")
+            terminated = True
 
         dmg_reward, idle_pen, vic_bonus, is_new_battle, whiteout_pen, farm_terminate = self._stats.update_battle(
             _in_battle_now,
