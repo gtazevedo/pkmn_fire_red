@@ -217,3 +217,10 @@ pokemon_tensorboard/
 *.log
 red_gym_env_pwhiddy.py
 DESIGN_GUIDELINES.md
+
+# MLflow
+mlruns/
+mlflow.db
+
+# Poetry
+poetry.lock

@@ -7,7 +7,23 @@ import numpy as np
 
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, CallbackList
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
+from stable_baselines3.common.logger import KVWriter, configure
 from sb3_contrib import RecurrentPPO
+
+class MLflowOutputFormat(KVWriter):
+    def write(self, key_values, key_excluded, step=0):
+        metrics = {}
+        for k, v in key_values.items():
+            if isinstance(v, (int, float, np.number)):
+                metrics[k] = float(v)
+        if metrics:
+            try:
+                mlflow.log_metrics(metrics, step=step)
+            except Exception:
+                pass
+            
+    def close(self):
+        pass
 
 from src.config import CFG, log, RAM_SIZE, FRAMES_PER_STEP
 from src.env import PokemonEnv
@@ -426,6 +442,11 @@ class Trainer:
 
         learn_iter     = 0
         training_start = time.time()
+        
+        # Injeta o logger do MLflow
+        logger = configure(CFG.tensorboard_log_dir, ["stdout", "tensorboard"])
+        logger.output_formats.append(MLflowOutputFormat())
+        self._model.set_logger(logger)
 
         try:
             while True:
