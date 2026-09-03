@@ -4,6 +4,10 @@
 train:
 	~/.local/bin/poetry run python -m scripts.train
 
+# Inicia a bateria de testes de hiperparâmetros
+tune:
+	~/.local/bin/poetry run python -m scripts.tune
+
 # Abre a janela gráfica para visualizar o agente jogando (necessita Pygame e tela ativa)
 enjoy:
 	~/.local/bin/poetry run python -m scripts.enjoy
