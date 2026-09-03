@@ -3,7 +3,7 @@ import os
 import stable_retro
 
 # Adiciona o caminho do projeto para importar modulos
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from src.env import RamReader
 
 import glob

@@ -19,7 +19,7 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 # Certifica de que a pasta raiz do projeto está no path para importar src
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.env import PokemonEnv
 from src.config import CFG, ActionSpace
 from src.progress import ProgressManager

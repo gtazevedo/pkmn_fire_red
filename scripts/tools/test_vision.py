@@ -1,5 +1,8 @@
 import cv2
 import numpy as np
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from src.vision import VisionEngine
 
 img = cv2.imread('/mnt/c/Users/guilh/.gemini/antigravity/brain/7277d84d-02ea-4c17-85c5-47df9833bc22/battle_start_env4.png')

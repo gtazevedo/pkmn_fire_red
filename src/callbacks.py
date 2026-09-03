@@ -1,6 +1,7 @@
 import os
 import time
 import shutil
+import mlflow
 from collections import deque
 import numpy as np
 
@@ -443,6 +444,12 @@ class Trainer:
                 stamp_file = CFG.model_path + ".stamp"
                 with open(stamp_file, "w") as f:
                     f.write(CFG.config_stamp)
+
+                try:
+                    mlflow.log_artifact(CFG.model_path + ".zip")
+                    mlflow.log_artifact(CFG.model_path + "_vecnorm.pkl")
+                except Exception as e:
+                    log.error(f"Failed to log artifacts to MLflow: {e}")
                     
                 # [USER REQUEST] Salva um print do ambiente a cada checkpoint para inspeção do Agente "Juiz"
                 try:

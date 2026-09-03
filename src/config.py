@@ -19,12 +19,15 @@ class Config:
     pallet_exterior_state_file: str = "./progress_states/pallet_exterior.state"
     # Probabilidade de iniciar do exterior (quando o state existir)
     exterior_start_ratio: float = 0.60
-    model_path:          str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_lstm_model"
-    checkpoint_dir:      str = "/mnt/d/projects/pkmn_fire_red_saves/checkpoints/"
+    
+    # Caminho base configurável via env var, mas com fallback para o D: para NÃO QUEBRAR
+    base_save_dir: str = os.getenv("PKMN_SAVE_DIR", "/mnt/d/projects/pkmn_fire_red_saves")
+    model_path:          str = f"{base_save_dir}/pokemon_lstm_model"
+    checkpoint_dir:      str = f"{base_save_dir}/checkpoints/"
     progress_dir:        str = "./progress_states/"
-    tensorboard_log_dir: str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_tensorboard/"
-    log_file:            str = "/mnt/d/projects/pkmn_fire_red_saves/pokemon_training.log"
-    whiteout_frame_dir:  str = "/mnt/d/projects/pkmn_fire_red_saves/whiteout_frames/"
+    tensorboard_log_dir: str = f"{base_save_dir}/pokemon_tensorboard/"
+    log_file:            str = f"{base_save_dir}/pokemon_training.log"
+    whiteout_frame_dir:  str = f"{base_save_dir}/whiteout_frames/"
 
     # [FIX v26b] config_stamp bumped — Fix do bypass hardcoded de +0.5 no advisor.py
     config_stamp:        str = "v26b_dialog_bypass_fix"
