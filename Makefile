@@ -10,7 +10,7 @@ enjoy:
 
 # Abre a interface gráfica do MLflow no navegador
 ui:
-	mlflow ui -h 127.0.0.1 -p 5000
+	mlflow ui --backend-store-uri sqlite:///mlflow.db -h 127.0.0.1 -p 5000
 
 # Limpa caches do python
 clean:

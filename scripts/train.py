@@ -11,7 +11,7 @@ from src.config import CFG, ActionSpace
 import mlflow
 
 def main(reset_training: bool = False) -> None:
-    mlflow.set_tracking_uri("file://" + os.path.abspath("mlruns"))
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("Pokemon_RL_FireRed")
     
     with mlflow.start_run(run_name=CFG.config_stamp):
