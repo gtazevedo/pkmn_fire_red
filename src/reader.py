@@ -22,6 +22,10 @@ class RamReader:
     _OBJECT_EVENTS_COUNT = 16
     _OBJECT_EVENT_SIZE = 36
     _MAP_BORDER_OFFSET = 7
+    _PLAYER_PARTY_OFFSET = 0x24284
+    _ENEMY_PARTY_OFFSET = 0x2402C
+    _MON_STRUCT_SIZE = 100
+    _BADGES_FLAG_OFFSET = 0x0EE0 + (0x820 >> 3)  # 0x0FE4 em SaveBlock1 (bits 0..7 = 8 insígnias)
 
     @staticmethod
     def _clamp(val, lo: int, hi: int) -> int:
@@ -151,17 +155,70 @@ class RamReader:
 
     @classmethod
     def get_p1_status(cls, ram_array) -> int:
+        if ram_array is None:
+            return 0
+        if len(ram_array) >= cls._PLAYER_PARTY_OFFSET + cls._MON_STRUCT_SIZE:
+            maxhp = cls._read_u16(ram_array, cls._PLAYER_PARTY_OFFSET + 88)
+            if maxhp > 0:
+                status_val = cls._read_u32(ram_array, cls._PLAYER_PARTY_OFFSET + 80)
+                return 1 if status_val > 0 else 0
+
         wram_offset = cls.get_saveblock1_ptr(ram_array)
-        if wram_offset == 0: return 0
-        # Pokemon 1 começa no offset 0x0294. Status está no byte 80 da struct (0x50).
+        if wram_offset == 0:
+            return 0
+        # Fallback: Pokemon 1 começa no offset 0x0294. Status está no byte 80 da struct (0x50).
         status_start = wram_offset + 0x0294 + 80
-        if len(ram_array) <= status_start + 3: return 0
-        
-        b1, b2, b3, b4 = int(ram_array[status_start]), int(ram_array[status_start+1]), int(ram_array[status_start+2]), int(ram_array[status_start+3])
-        status_val = b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)
-        
+        if len(ram_array) <= status_start + 3:
+            return 0
+
+        status_val = cls._read_u32(ram_array, status_start)
         # Se for > 0, tem alguma condição negativa (Poison, Paralyze, Sleep, etc)
         return 1 if status_val > 0 else 0
+
+    @classmethod
+    def enrich_info_from_ram(cls, info: dict, ram_array) -> dict:
+        """
+        Corrige e completa `info` do stable-retro lendo diretamente a RAM do FireRed:
+        - Coordenadas reais (player_x, player_y) do SaveBlock1 (evita ponteiro bruto 21884)
+        - Party do jogador em EWRAM gPlayerParty (0x02024284)
+        - Party inimiga em EWRAM gEnemyParty (0x0202402C)
+        - Insígnias nas flags de SaveBlock1 (offset 0x0FE4)
+        """
+        if ram_array is None:
+            return info
+
+        px, py = cls.get_player_coords(ram_array, info)
+        info["player_x"] = px
+        info["player_y"] = py
+
+        ram_len = len(ram_array)
+        if ram_len >= cls._PLAYER_PARTY_OFFSET + 6 * cls._MON_STRUCT_SIZE:
+            if cls._read_u16(ram_array, cls._PLAYER_PARTY_OFFSET + 88) > 0:
+                for i in range(1, 7):
+                    base = cls._PLAYER_PARTY_OFFSET + (i - 1) * cls._MON_STRUCT_SIZE
+                    maxhp = cls._read_u16(ram_array, base + 88)
+                    info[f"p{i}_lvl"] = int(ram_array[base + 84]) if maxhp > 0 else 0
+                    info[f"p{i}_hp"] = cls._read_u16(ram_array, base + 86) if maxhp > 0 else 0
+                    info[f"p{i}_maxhp"] = maxhp
+
+        if ram_len >= cls._ENEMY_PARTY_OFFSET + 6 * cls._MON_STRUCT_SIZE:
+            e1_maxhp = cls._read_u16(ram_array, cls._ENEMY_PARTY_OFFSET + 88)
+            if 0 < e1_maxhp <= CFG.max_enemy_hp:
+                for i in range(1, 7):
+                    base = cls._ENEMY_PARTY_OFFSET + (i - 1) * cls._MON_STRUCT_SIZE
+                    maxhp = cls._read_u16(ram_array, base + 88)
+                    valid = 0 < maxhp <= CFG.max_enemy_hp
+                    info[f"e{i}_lvl"] = int(ram_array[base + 84]) if valid else 0
+                    info[f"e{i}_hp"] = cls._read_u16(ram_array, base + 86) if valid else 0
+                    info[f"e{i}_maxhp"] = maxhp if valid else 0
+
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        if wram_offset > 0 and ram_len > wram_offset + cls._BADGES_FLAG_OFFSET:
+            badge_byte = int(ram_array[wram_offset + cls._BADGES_FLAG_OFFSET])
+            if "badges" not in info or info["badges"] == 0:
+                info["badges"] = badge_byte
+
+        return info
 
     @classmethod
     def map_id(cls, info: dict) -> int:

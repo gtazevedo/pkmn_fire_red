@@ -129,3 +129,48 @@ def test_collision_grid_out_of_bounds_and_null_safety():
     assert np.all(grid[7:, :] == RamReader.TILE_BLOCKED)
     assert np.all(grid[:, 7:] == RamReader.TILE_BLOCKED)
     assert grid[4, 4] == RamReader.TILE_WALKABLE
+
+
+def test_enrich_info_from_ram_party_enemy_coords_and_badges():
+    sb1_off = 0x026000
+    ram = _make_ram(sb1_offset=sb1_off)
+
+    # Coordenadas reais no SaveBlock1: (12, 9)
+    struct.pack_into("<hh", ram, sb1_off, 12, 9)
+
+    # 3 insígnias ligadas no byte 0x0FE4 do SaveBlock1
+    ram[sb1_off + RamReader._BADGES_FLAG_OFFSET] = 0b00000111
+
+    # gPlayerParty slot 1 (0x24284): lvl=16, hp=35, maxhp=44, status=0x08 (Poison)
+    p1 = RamReader._PLAYER_PARTY_OFFSET
+    ram[p1 + 84] = 16
+    struct.pack_into("<I", ram, p1 + 80, 0x08)
+    struct.pack_into("<HH", ram, p1 + 86, 35, 44)
+
+    # gEnemyParty slot 1 (0x2402C): lvl=14, hp=18, maxhp=36
+    e1 = RamReader._ENEMY_PARTY_OFFSET
+    ram[e1 + 84] = 14
+    struct.pack_into("<HH", ram, e1 + 86, 18, 36)
+
+    # Simula info corrompido pelo stable-retro data.json
+    info = {
+        "player_x": 21884,
+        "player_y": 21884,
+        "p1_lvl": 16,
+        "p1_hp": 14,
+        "p1_maxhp": 0,
+        "e1_lvl": 4,
+        "e1_hp": 27920,
+    }
+
+    enriched = RamReader.enrich_info_from_ram(info, ram)
+    assert enriched["player_x"] == 12
+    assert enriched["player_y"] == 9
+    assert RamReader.party_level(enriched) == 16
+    assert RamReader.party_hp(enriched) == 35
+    assert RamReader.party_max_hp(enriched) == 44
+    assert RamReader.party_size(enriched) == 1
+    assert RamReader.enemy_hp(enriched) == 18
+    assert RamReader.max_enemy_level(enriched) == 14
+    assert RamReader.badges(enriched) == 3
+    assert RamReader.get_p1_status(ram) == 1

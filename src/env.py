@@ -87,6 +87,7 @@ class PokemonEnv(gym.Env):
     def _build_obs(self, raw_frame: np.ndarray, info: dict) -> dict:
         ms = self.max_steps
         ram = self.env.get_ram()
+        RamReader.enrich_info_from_ram(info, ram)
         base_ram = np.array([
             RamReader.coord(info, "player_x")  / CFG.max_coord,
             RamReader.coord(info, "player_y")  / CFG.max_coord,
@@ -272,6 +273,7 @@ class PokemonEnv(gym.Env):
 
         # [FIX v11-H] Warmup estável: exige 3 leituras consecutivas iguais de level>0
         raw_frame, info = self._warm_up()
+        RamReader.enrich_info_from_ram(info, self.env.get_ram())
         prev_lvl  = 0
         stable    = 0
         for _ in range(20):
@@ -284,9 +286,11 @@ class PokemonEnv(gym.Env):
                 stable = 0
             prev_lvl  = lvl
             raw_frame, info = self._warm_up(n=5)
+            RamReader.enrich_info_from_ram(info, self.env.get_ram())
 
-        RamReader.debug_dump(info, self.env_id, "POST-RESET")
         ram_post_reset = self.env.get_ram()
+        RamReader.enrich_info_from_ram(info, ram_post_reset)
+        RamReader.debug_dump(info, self.env_id, "POST-RESET")
         self._stats.reset(info, ram_array=ram_post_reset)
         # [FIX v20] Override max_event_sum com o valor correto do arquivo para evitar +2000 pontos no step 1
         self._stats.max_event_sum = max(self._stats.max_event_sum, base_flags)
@@ -322,6 +326,7 @@ class PokemonEnv(gym.Env):
         return self._build_obs(raw_frame, info), {}
 
     def step(self, action_idx: int):
+        terminated = False
         action = ActionSpace.get(action_idx)
         action_name = ActionSpace.NAMES[action_idx]
 
@@ -383,6 +388,7 @@ class PokemonEnv(gym.Env):
         # Isso ensina o agente a avançar os textos rapidamente.
         step_reward += self._rewards.add("time_pen", CFG.time_penalty)
         ram_array       = self.env.get_ram()
+        RamReader.enrich_info_from_ram(info, ram_array)
         text_bonus      = self._advisor.update(_in_battle_now, _script_lock, action_idx, ram_array)
         step_reward    += self._rewards.add("text", text_bonus)
 
@@ -600,7 +606,7 @@ class PokemonEnv(gym.Env):
             log.debug(f"[Env {self.env_id}] Interior-only early termination at step {self._stats.steps}")
 
         in_post_battle_grace = self._stats.post_battle_grace_remaining > 0
-        done = (hard_cap or farm_terminate or interior_only_terminate or
+        done = (terminated or hard_cap or farm_terminate or interior_only_terminate or
                 (over_limit and not _in_battle_now and not in_post_battle_grace))
 
         obs_dict = self._build_obs(raw_frame, info)

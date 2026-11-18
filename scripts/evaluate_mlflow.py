@@ -51,6 +51,7 @@ def evaluate(num_episodes: int = 3, max_eval_steps: int = 250) -> dict:
             episode_starts = np.ones((1,), dtype=bool)
             total_rew = 0.0
             steps = 0
+            last_info = {}
 
             for _ in range(max_eval_steps):
                 action_idx, lstm_states = model.predict(
@@ -60,27 +61,44 @@ def evaluate(num_episodes: int = 3, max_eval_steps: int = 250) -> dict:
                     deterministic=True,
                 )
                 obs, rewards, dones, infos = venv.step(action_idx)
+                last_info = infos[0] if infos else {}
                 total_rew += float(rewards[0])
                 steps += 1
                 episode_starts[0] = bool(dones[0])
                 if dones[0]:
                     break
 
-            ep_rewards.append(total_rew)
-            ep_steps.append(steps)
-            ep_tiles.append(len(raw_env._stats.tile_visits))
-            ep_maps.append(len(raw_env._stats.map_visits))
-            ep_strat_queries.append(raw_env._strategist.queries_count)
-            ep_strat_rew.append(raw_env._rewards.strategist)
-            ep_advisor_repeats.append(raw_env._advisor.repeat_penalties)
-
-            ep_metrics = {
-                "best_milestone": raw_env._progress._best_flags_ever,
-                "badges": raw_env._stats.last_badges,
-                "party_level": raw_env._stats.max_level,
-                "victories": raw_env._stats.victories,
-                "maps_visited": len(raw_env._stats.map_visits),
-            }
+            em = last_info.get("episode_metrics")
+            if em is not None:
+                ep_rewards.append(float(em["total_reward"]))
+                ep_steps.append(int(em["steps"]))
+                ep_tiles.append(int(em["unique_tiles"]))
+                ep_maps.append(int(em["maps_visited"]))
+                ep_strat_queries.append(int(em["strategist_queries_count"]))
+                ep_strat_rew.append(float(em["reward_strategist"]))
+                ep_advisor_repeats.append(int(em["advisor_repeat_penalties"]))
+                ep_metrics = {
+                    "best_milestone": em["best_milestone"],
+                    "badges": em["badges"],
+                    "party_level": em["party_level"],
+                    "victories": em["victories"],
+                    "maps_visited": em["maps_visited"],
+                }
+            else:
+                ep_rewards.append(total_rew)
+                ep_steps.append(steps)
+                ep_tiles.append(len(raw_env._stats.tile_visits))
+                ep_maps.append(len(raw_env._stats.map_visits))
+                ep_strat_queries.append(raw_env._strategist.queries_count)
+                ep_strat_rew.append(raw_env._rewards.strategist)
+                ep_advisor_repeats.append(raw_env._advisor.repeat_penalties)
+                ep_metrics = {
+                    "best_milestone": raw_env._progress._best_flags_ever,
+                    "badges": raw_env._stats.last_badges,
+                    "party_level": raw_env._stats.max_level,
+                    "victories": raw_env._stats.victories,
+                    "maps_visited": len(raw_env._stats.map_visits),
+                }
             ep_scores.append(PokemonCallback._progress_score(ep_metrics))
 
         elapsed = max(time.time() - t_start, 1e-6)
