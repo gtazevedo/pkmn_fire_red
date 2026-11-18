@@ -158,3 +158,49 @@ def test_current_battle_damage_resets_per_battle():
                         current_tile=(3, 19, 5, 5), party_level=5)
     assert stats.current_battle_damage == 8
     assert stats.battle_damage_total == 15
+
+
+def test_map_milestone_saving_and_sort_key(tmp_path):
+    assert ProgressManager._state_sort_key("/tmp/events_122.state") == 122.0
+    assert ProgressManager._state_sort_key("/tmp/events_122_m02_3_1.state") == 122.02
+
+    (tmp_path / "events_122.state").write_bytes(b"BASE122")
+    pm = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+    assert pm._best_flags_ever == 122
+    assert pm._best_map_rank == 0
+
+    fake_emu_r1 = SimpleNamespace(em=SimpleNamespace(get_state=lambda: b"ROUTE1_STATE"))
+    pm.check_and_save_map_milestone(fake_emu_r1, 122, (3, 19), env_id=0)
+    p_r1 = tmp_path / "events_122_m01_3_19.state"
+    assert p_r1.read_bytes() == b"ROUTE1_STATE"
+    assert pm._best_map_rank == 1
+
+    fake_emu_vir = SimpleNamespace(em=SimpleNamespace(get_state=lambda: b"VIRIDIAN_STATE"))
+    pm.check_and_save_map_milestone(fake_emu_vir, 122, (3, 1), env_id=0)
+    p_vir = tmp_path / "events_122_m02_3_1.state"
+    assert p_vir.read_bytes() == b"VIRIDIAN_STATE"
+    assert pm._best_map_rank == 2
+
+    # Mapa de rank menor ou igual no mesmo flags nao deve duplicar, nem mapa fora do grafo
+    pm.check_and_save_map_milestone(fake_emu_r1, 122, (3, 19), env_id=0)
+    pm.check_and_save_map_milestone(fake_emu_r1, 122, (4, 0), env_id=0)
+    assert not (tmp_path / "events_122_m00_4_0.state").exists()
+
+    # Recarregar do disco deve preservar _best_map_rank=2 e colocar m02 no topo
+    pm_reload = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+    assert pm_reload._best_flags_ever == 122
+    assert pm_reload._best_map_rank == 2
+    assert os.path.basename(pm_reload._best_state_file) == "events_122_m02_3_1.state"
+
+
+def test_episode_stats_seeds_spawn_map_and_y_bounds():
+    stats = EpisodeStats()
+    stats.reset({"map_bank": 4, "map_id": 0, "player_y": 8})
+    assert stats.map_visits == {(4, 0)}
+    assert stats.y_min_episode == 8
+    assert stats.y_max_episode == 8
+
+    _, is_new_spawn = stats.update_exploration((4, 0, 5, 8), (4, 0), include_new_map_bonus=False)
+    assert is_new_spawn is False
+    _, is_new_pallet = stats.update_exploration((3, 0, 5, 8), (3, 0), include_new_map_bonus=False)
+    assert is_new_pallet is True

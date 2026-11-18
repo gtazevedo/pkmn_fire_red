@@ -278,10 +278,50 @@ class Strategist:
             )
 
         if has_parcel:
+            if bank == 5:
+                return StrategicGoal(
+                    sub_goal="Exit Viridian interior south to return Oak's Parcel",
+                    target_map_bank=3,
+                    target_map_id=1,
+                    priority="explore",
+                    navigation_hint="south",
+                )
+            if (bank, mid) == (3, 1):
+                return StrategicGoal(
+                    sub_goal="Leave Viridian City south onto Route 1",
+                    target_map_bank=3,
+                    target_map_id=19,
+                    priority="explore",
+                    navigation_hint="south",
+                )
+            if (bank, mid) == (3, 19):
+                return StrategicGoal(
+                    sub_goal="Head south down Route 1 to Pallet Town",
+                    target_map_bank=3,
+                    target_map_id=0,
+                    priority="explore",
+                    navigation_hint="south",
+                )
+            if (bank, mid) == (3, 0):
+                return StrategicGoal(
+                    sub_goal="Enter Prof. Oak's Lab to deliver Oak's Parcel",
+                    target_map_bank=4,
+                    target_map_id=3,
+                    priority="explore",
+                    navigation_hint="south",
+                )
+            if (bank, mid) == (4, 3):
+                return StrategicGoal(
+                    sub_goal="Deliver Oak's Parcel to Prof. Oak",
+                    target_map_bank=4,
+                    target_map_id=3,
+                    priority="explore",
+                    navigation_hint="interact",
+                )
             return StrategicGoal(
                 sub_goal="Return south to deliver Oak's Parcel",
                 target_map_bank=4,
-                target_map_id=2,
+                target_map_id=3,
                 priority="explore",
                 navigation_hint="south",
             )
@@ -300,7 +340,7 @@ class Strategist:
                 return StrategicGoal(
                     sub_goal="Enter Prof. Oak's Lab to receive starter",
                     target_map_bank=4,
-                    target_map_id=2,
+                    target_map_id=3,
                     priority="explore",
                     navigation_hint="east",
                 )
@@ -319,6 +359,21 @@ class Strategist:
                 target_map_id=1,
                 priority="explore",
                 navigation_hint="north",
+            )
+
+        if (
+            bank == 3
+            and mid == 1
+            and not has_parcel
+            and context.get("event_flags", 0) < 126
+            and context.get("badges", 0) == 0
+        ):
+            return StrategicGoal(
+                sub_goal="Enter Viridian Poke Mart to pick up Oak's Parcel",
+                target_map_bank=5,
+                target_map_id=3,
+                priority="explore",
+                navigation_hint="east",
             )
 
         if (bank, mid) in KANTO_PROGRESSION_GRAPH:

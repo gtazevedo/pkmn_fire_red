@@ -7,6 +7,7 @@ import numpy as np
 from src.advisor import RamAdvisor
 from src.config import CFG, GOAL_SIZE
 from src.strategist import StrategicGoal, Strategist
+from src.vision import GameState, VisionEngine
 
 
 def _encode_gen3(text: str) -> bytes:
@@ -167,3 +168,64 @@ def test_strategist_async_non_blocking_and_offline_fallback(monkeypatch):
         strat._pending_future.result(timeout=2.0)
     assert strat._ollama_cooldown_until > 0.0
     strat.close()
+
+
+def test_strategist_oaks_parcel_chain_and_viridian_mart():
+    import struct
+
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+
+    # Sem inicial em Pallet Town (3, 0) -> deve mirar Lab do Prof. Oak (4, 3)
+    ctx_no_starter = strat.build_context(
+        {"map_bank": 3, "map_id": 0, "p1_lvl": 0}, None, in_battle=False, total_flags=113
+    )
+    g_lab = strat._heuristic_goal(ctx_no_starter)
+    assert (g_lab.target_map_bank, g_lab.target_map_id) == (4, 3)
+
+    # Em Viridian City (3, 1) antes de pegar Oak's Parcel -> deve apontar Viridian Poke Mart (5, 3)
+    ctx_viridian = strat.build_context(
+        {"map_bank": 3, "map_id": 1, "p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24},
+        None,
+        in_battle=False,
+        total_flags=122,
+    )
+    g_mart = strat._heuristic_goal(ctx_viridian)
+    assert (g_mart.target_map_bank, g_mart.target_map_id) == (5, 3)
+
+    # RAM simulada com Oak's Parcel (item_id=349, qty=1 em SaveBlock1 + 0x03B8)
+    ram = np.zeros(262144 + 0x6000, dtype=np.uint8)
+    sb1 = 0x025000
+    struct.pack_into("<I", ram, 262144 + 0x5008, 0x02000000 | sb1)
+    struct.pack_into("<HH", ram, sb1 + 0x03B8, 349, 1)
+
+    expected_chain = [
+        ((5, 3), (3, 1), "south"),
+        ((3, 1), (3, 19), "south"),
+        ((3, 19), (3, 0), "south"),
+        ((3, 0), (4, 3), "south"),
+        ((4, 3), (4, 3), "interact"),
+    ]
+    for (cur_b, cur_id), (tgt_b, tgt_id), hint in expected_chain:
+        ctx = strat.build_context(
+            {"map_bank": cur_b, "map_id": cur_id, "p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24},
+            ram,
+            in_battle=False,
+            total_flags=122,
+        )
+        assert ctx["has_oaks_parcel"] is True
+        g = strat._heuristic_goal(ctx)
+        assert (g.target_map_bank, g.target_map_id) == (tgt_b, tgt_id)
+        assert g.navigation_hint == hint
+
+    strat.close()
+
+
+def test_vision_two_line_dialogue_detection():
+    vision = VisionEngine()
+    frame = np.full((160, 240, 3), 100, dtype=np.uint8)
+    # Simula caixa de dialogo branca com ~20% de pixels de texto escuro (mean ~198)
+    box = np.full((40, 224, 3), 245, dtype=np.uint8)
+    box[8:16, 16:180] = 40
+    box[22:30, 16:150] = 40
+    frame[112:152, 8:232] = box
+    assert vision.detect_state(frame) == GameState.DIALOGUE

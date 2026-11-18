@@ -63,6 +63,8 @@ class PokemonEnv(gym.Env):
         self._prev_map_key: tuple = ()            # para detectar transições
         self._ever_left_interior: bool = False    # para early termination interior-only
         self._steps_interior_only: int = 0        # contador de steps só em bank=4
+        self._battle_screenshot_saved: bool = False
+        self._had_parcel_in_ep: bool = False
 
     @property
     def max_steps(self) -> int:
@@ -285,6 +287,17 @@ class PokemonEnv(gym.Env):
             raw_frame, info = self._warm_up(n=5)
             RamReader.enrich_info_from_ram(info, self.env.get_ram())
 
+        # Desbloquear callbacks presos em diálogo/placa pós-reset (ex: 0x0805674D em events_113/121)
+        B_BTN = ActionSpace.get(ActionSpace.NAMES.index("B"))
+        for _ in range(10):
+            if info.get("gMain_callback2", 0) != 0x0805674D:
+                break
+            for _ in range(4):
+                raw_frame, _, _, _, info = self.env.step(B_BTN)
+            for _ in range(4):
+                raw_frame, _, _, _, info = self.env.step(ActionSpace.NO_OP)
+            RamReader.enrich_info_from_ram(info, self.env.get_ram())
+
         ram_post_reset = self.env.get_ram()
         RamReader.enrich_info_from_ram(info, ram_post_reset)
         RamReader.debug_dump(info, self.env_id, "POST-RESET")
@@ -298,6 +311,8 @@ class PokemonEnv(gym.Env):
         self._advisor.reset()
         self._strategist.reset(info, ram_array=ram_post_reset)
         self._last_raw_frame = raw_frame
+        self._battle_screenshot_saved = False
+        self._had_parcel_in_ep = RamReader.has_oaks_parcel(ram_post_reset)
 
         # [FIX v15-Stairs] Reset do controle de loop
         self._map_history.clear()
@@ -346,14 +361,18 @@ class PokemonEnv(gym.Env):
         cv_state = self._vision.detect_state(raw_frame)
         _cb2 = int(info.get("gMain_callback2", 0) or 0)
         _not_in_overworld = (_cb2 != 134571445)
-        _is_whiteout   = (cv_state == GameState.WHITEOUT)
+        _is_whiteout   = (RamReader.party_hp(info) == 0 and RamReader.party_max_hp(info) > 0)
         _was_in_battle = getattr(self._stats, "was_in_battle", False)
         _in_battle_now = (
             RamReader.is_in_battle(info)
             or ((cv_state == GameState.BATTLE) and _not_in_overworld)
             or (_was_in_battle and _not_in_overworld and not _is_whiteout and _cb2 != 0)
         )
-        _script_lock   = bool(info.get('script_lock', 0)) or (cv_state == GameState.DIALOGUE)
+        _script_lock = (
+            bool(info.get('script_lock', 0))
+            or (cv_state == GameState.DIALOGUE)
+            or (not _in_battle_now and _not_in_overworld and _cb2 != 0)
+        )
 
         # [FIX v22 / v30b] Tactical Macro Execution com anti-farming real
         macro_reward = 0.0
@@ -391,13 +410,16 @@ class PokemonEnv(gym.Env):
                 # [FIX v23] Punição leve para queimar a mão do agente se ele spammar o botão no vazio
                 macro_reward -= 0.05
         
-        # [USER REQUEST] Salvar print da tela quando iniciar a batalha
-        if _in_battle_now and not getattr(self._stats, 'was_in_battle', False):
+        # [USER REQUEST] Salvar print da tela quando iniciar a batalha (após fade-in)
+        if not _in_battle_now:
+            self._battle_screenshot_saved = False
+        elif not self._battle_screenshot_saved and float(np.mean(raw_frame)) > 30.0:
             artifact_dir = "/mnt/c/Users/guilh/.gemini/antigravity/brain/dc565810-e46b-4a70-8005-69b3883d03bc"
             os.makedirs(artifact_dir, exist_ok=True)
             img_path = os.path.join(artifact_dir, f"battle_start_env{self.env_id}.png")
             # raw_frame is RGB, cv2 expects BGR
             cv2.imwrite(img_path, cv2.cvtColor(raw_frame, cv2.COLOR_RGB2BGR))
+            self._battle_screenshot_saved = True
             log.info(f"[Env {self.env_id}] 📸 PRINT DA BATALHA SALVO EM {img_path}")
         
         step_reward = 0.0
@@ -433,6 +455,19 @@ class PokemonEnv(gym.Env):
         map_bank = RamReader.map_bank(info)
         tile     = (map_bank, map_id, x, y)
         map_key  = (map_bank, map_id)
+
+        has_parcel_now = RamReader.has_oaks_parcel(ram_array)
+        if has_parcel_now and not self._had_parcel_in_ep:
+            self._had_parcel_in_ep = True
+            self._explore_reward_per_map.clear()
+            self._stats.tile_visits.clear()
+            self._stats.map_visits = {map_key}
+            self._stats.y_min_episode = y
+            self._stats.y_max_episode = y
+            log.info(
+                f"[Env {self.env_id}] 📦 Oak's Parcel obtido! "
+                "Resetando exploração para viagem de retorno ao Lab."
+            )
 
         # [FIX v18.1] Salva dinamicamente o state exterior apenas quando ele está
         # a uma distância segura da porta (y >= 10), para evitar que nasça pisando
@@ -482,7 +517,7 @@ class PokemonEnv(gym.Env):
         # Não recompensa exploração durante batalha (evita reward espúrio de teleporte pós-batalha)
         if not _in_battle_now:
 
-            is_interior = (map_bank == 4)
+            is_interior = (map_bank >= 4)
 
             # [FIX v17-A] Early termination se nunca saiu de mapas interiores
             if is_interior:
@@ -497,7 +532,6 @@ class PokemonEnv(gym.Env):
             if not is_interior:
                 step_reward += self._rewards.add("milestone", CFG.outdoor_sustain_bonus)
 
-            was_new_map_ever = map_key not in self._stats.all_maps_visited
             explore_r, is_new_map = self._stats.update_exploration(
                 tile, map_key, include_new_map_bonus=False
             )
@@ -513,16 +547,32 @@ class PokemonEnv(gym.Env):
 
             step_reward += self._rewards.add("explore", explore_r)
 
-            if was_new_map_ever:
+            if is_new_map:
                 map_disc_bonus = CFG.new_map_bonus_route if map_bank == 3 else CFG.new_map_bonus
                 step_reward += self._rewards.add("map_disc", map_disc_bonus)
-            
-            if is_new_map:
-                # Reset y_min_episode to current y so we don't get a massive north bonus just by changing map
+                # Reset y bounds on map transition so entering a map doesn't give a free bonus
                 self._stats.y_min_episode = y
+                self._stats.y_max_episode = y
+                if (
+                    _cb2 == 134571445
+                    and not _script_lock
+                    and RamReader.party_level(info) > 0
+                    and RamReader.party_hp(info) > 0
+                ):
+                    self._progress.check_and_save_map_milestone(
+                        self.env, total_flags, map_key, self.env_id
+                    )
 
-            # North bonus: y decresce ao ir para norte no FireRed
-            if y < self._stats.y_min_episode:
+            nav_hint = self._strategist.current_goal.navigation_hint
+            if nav_hint == "south":
+                if y > self._stats.y_max_episode:
+                    south_steps = y - self._stats.y_max_episode
+                    south_r = south_steps * CFG.north_bonus_per_tile
+                    self._stats.y_max_episode = y
+                    step_reward += self._rewards.add("milestone", south_r)
+                    log.debug(f"[Env {self.env_id}] South return progress! y={y} (+{south_r:.1f})")
+            elif y < self._stats.y_min_episode:
+                # North bonus: y decresce ao ir para norte no FireRed
                 north_steps = self._stats.y_min_episode - y
                 north_r = north_steps * CFG.north_bonus_per_tile
                 self._stats.y_min_episode = y

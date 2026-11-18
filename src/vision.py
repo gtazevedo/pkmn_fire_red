@@ -72,10 +72,15 @@ class VisionEngine:
         """
         # Dialogue box is usually at y=112:152, x=8:232
         dialogue_box = gray[112:152, 8:232]
-        
-        # A dialogue box has a white interior and a dark border.
-        # If the interior is very bright and uniform, it's a dialogue.
-        if np.mean(dialogue_box) > 220:
+
+        # A dialogue box has a white interior and dark border/text.
+        mean_val = float(np.mean(dialogue_box))
+        if mean_val > 220:
             return True
-            
+        if mean_val > 175:
+            bright_ratio = float(np.mean(dialogue_box > 220))
+            dark_ratio = float(np.mean(dialogue_box < 90))
+            if bright_ratio > 0.50 and dark_ratio > 0.02:
+                return True
+
         return False

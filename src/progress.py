@@ -1,4 +1,5 @@
 import os
+import re
 import math
 import glob
 import random
@@ -18,10 +19,26 @@ class ProgressManager:
       - ~30% em estados intermediários recentes
       - ~20% em estados iniciais (mitiga esquecimento catastrófico)
     """
+    MAP_PROGRESSION_RANK: dict[tuple[int, int], int] = {
+        (3, 19): 1,
+        (3, 1): 2,
+        (5, 4): 3,
+        (5, 3): 4,
+        (3, 20): 5,
+        (1, 0): 6,
+        (3, 2): 7,
+        (6, 2): 8,
+        (3, 21): 9,
+        (1, 1): 10,
+        (3, 22): 11,
+        (3, 3): 12,
+    }
+
     def __init__(self, progress_dir: Optional[str] = None, state_file: Optional[str] = None):
         self._progress_dir = progress_dir or CFG.progress_dir
         os.makedirs(self._progress_dir, exist_ok=True)
         self._best_flags_ever: int = 0
+        self._best_map_rank: int = 0
         self.tier_counts: dict[str, int] = {"frontier": 0, "intermediate": 0, "initial": 0}
         self._saved_states: list[str] = [state_file or CFG.state_file]
         if progress_dir is None and os.path.exists(CFG.pallet_exterior_state_file):
@@ -110,23 +127,56 @@ class ProgressManager:
                     f"Saved/Loaded → {state_path}"
                 )
                 self._best_flags_ever = total_flags
+                self._best_map_rank = 0
             except Exception as e:
                 log.warning(f"[Env {env_id}] Falha ao salvar state de flag: {e}")
         return 0.0
 
+    def check_and_save_map_milestone(
+        self,
+        emulator,
+        total_flags: int,
+        map_key: tuple[int, int],
+        env_id: int,
+    ) -> float:
+        rank = self.MAP_PROGRESSION_RANK.get(map_key, 0)
+        if rank == 0 or total_flags < self._best_flags_ever:
+            return 0.0
+        if total_flags > self._best_flags_ever or rank > self._best_map_rank:
+            state_path = os.path.join(
+                self._progress_dir,
+                f"events_{total_flags:03d}_m{rank:02d}_{map_key[0]}_{map_key[1]}.state",
+            )
+            try:
+                if not os.path.exists(state_path):
+                    state_data = emulator.em.get_state()
+                    with open(state_path, "wb") as f:
+                        f.write(state_data)
+                if state_path not in self._saved_states:
+                    self._saved_states.append(state_path)
+                self._best_flags_ever = max(self._best_flags_ever, total_flags)
+                self._best_map_rank = rank
+                log.info(
+                    f"[Env {env_id}] 🗺️ NEW MAP MILESTONE: map={map_key} rank={rank} "
+                    f"flags={total_flags} → {state_path}"
+                )
+            except Exception as e:
+                log.warning(f"[Env {env_id}] Falha ao salvar map milestone: {e}")
+        return 0.0
+
     @staticmethod
-    def _state_sort_key(path: str) -> int:
-        """Extrai o número de flags do nome do arquivo para ordenação."""
+    def _state_sort_key(path: str) -> float:
+        """Extrai o número de flags (e sub-rank geográfico) do nome do arquivo para ordenação."""
         basename = os.path.basename(path)
-        try:
-            if "events_" in basename:
-                return int(basename.replace("events_", "").replace(".state", ""))
-        except ValueError:
-            pass
+        match = re.match(r"events_(\d+)(?:_m(\d+)(?:_\d+_\d+)?)?\.state$", basename)
+        if match:
+            flags = int(match.group(1))
+            rank = int(match.group(2)) if match.group(2) else 0
+            return flags + rank / 100.0
         # Start.state e pallet_exterior → prioridade baixa
         if "pallet_exterior" in basename:
-            return 1
-        return 0
+            return 1.0
+        return 0.0
 
     def _state_path(self, total_flags: int) -> str:
         return os.path.join(self._progress_dir, f"events_{total_flags:03d}.state")
@@ -136,21 +186,29 @@ class ProgressManager:
         pattern = os.path.join(self._progress_dir, "events_*.state")
         files = glob.glob(pattern)
         max_flag = 0
+        max_rank = 0
         for f in files:
             if f not in self._saved_states:
                 self._saved_states.append(f)
-            # Extrai o numero de flags do nome
+            # Extrai o numero de flags (e rank geografico) do nome
             basename = os.path.basename(f)
-            try:
-                num = int(basename.replace("events_", "").replace(".state", ""))
+            match = re.match(r"events_(\d+)(?:_m(\d+)(?:_\d+_\d+)?)?\.state$", basename)
+            if match:
+                num = int(match.group(1))
+                rank = int(match.group(2)) if match.group(2) else 0
                 if num > max_flag:
                     max_flag = num
-            except ValueError:
-                pass
-        
+                    max_rank = rank
+                elif num == max_flag and rank > max_rank:
+                    max_rank = rank
+
         self._best_flags_ever = max_flag
+        self._best_map_rank = max_rank
         if max_flag > 0:
-            log.info(f"[ProgressManager] Currículo dinâmico: {len(files)} states carregados, recorde = {max_flag} flags.")
+            log.info(
+                f"[ProgressManager] Currículo dinâmico: {len(files)} states carregados, "
+                f"recorde = {max_flag} flags (map_rank={max_rank})."
+            )
         else:
             log.info("[ProgressManager] Sem progresso salvo — iniciando do começo.")
 
@@ -245,6 +303,7 @@ class EpisodeStats:
     last_badges:       int  = 0
     battle_idle_steps: int  = 0
     y_min_episode:     int  = 255
+    y_max_episode:     int  = 0
     # [FIX v11-D] Conta presses de A recompensados na batalha atual
     battle_a_presses:  int  = 0
     # [FIX v11-B] Conta presses de A totais na batalha (para threshold de B penalty)
@@ -295,7 +354,10 @@ class EpisodeStats:
 
     def reset(self, info: dict, ram_array=None) -> None:
         self.tile_visits       = defaultdict(int)
-        self.map_visits        = set()
+        if "map_bank" in info or "map_id" in info:
+            self.map_visits = {(RamReader.map_bank(info), RamReader.map_id(info))}
+        else:
+            self.map_visits = set()
         self.steps_on_cur_tile = 0
         self.total_stuck_steps = 0
         self.last_tile         = ()
@@ -315,7 +377,13 @@ class EpisodeStats:
         self.was_in_battle     = False
         self.last_badges       = RamReader.badges(info)
         self.battle_idle_steps = 0
-        self.y_min_episode     = 255
+        if "player_y" in info:
+            init_y = RamReader.coord(info, "player_y")
+            self.y_min_episode = init_y
+            self.y_max_episode = init_y
+        else:
+            self.y_min_episode = 255
+            self.y_max_episode = 0
         self.battle_a_presses  = 0
         self.battle_total_a    = 0
         self.post_battle_grace_remaining = 0
@@ -408,7 +476,7 @@ class EpisodeStats:
 
         # 2. Define o cap de exploração baseado no tipo de mapa
         map_bank = map_key[0]
-        explore_cap = CFG.map_explore_cap_interior if map_bank == 4 else CFG.map_explore_cap_exterior
+        explore_cap = CFG.map_explore_cap_interior if map_bank >= 4 else CFG.map_explore_cap_exterior
 
         # 3. Se o mapa bateu no limite de exploração
         if self.explore_rewards_per_map[map_key] > explore_cap:

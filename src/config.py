@@ -69,7 +69,7 @@ class Config:
     ollama_model:                str   = "qwen2.5:7b"
     ollama_timeout_sec:          float = 3.0
     strategist_stagnation_steps: int   = 500
-    strategist_goal_bonus:       float = 3.0
+    strategist_goal_bonus:       float = 30.0
     dialog_repeat_penalty:       float = -0.001
 
     # --- training ---
@@ -97,7 +97,7 @@ class Config:
     # farm de exploração e enrolação do agente.
     # [FIX v27] Reduzido de 10k para 4k: episódios longos demais permitem
     # ao agente "enrolar" com R≈80 sem explorar. Mais curtos = mais resets = mais variedade.
-    max_steps_p3: int = 4_000
+    max_steps_p3: int = 8_000
 
     # --- frame skip ---
     frames_held: int = 6
