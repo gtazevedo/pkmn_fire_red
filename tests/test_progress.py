@@ -204,3 +204,21 @@ def test_episode_stats_seeds_spawn_map_and_y_bounds():
     assert is_new_spawn is False
     _, is_new_pallet = stats.update_exploration((3, 0, 5, 8), (3, 0), include_new_map_bonus=False)
     assert is_new_pallet is True
+
+
+def test_parcel_milestones_and_cross_worker_disk_sync(tmp_path):
+    (tmp_path / "events_123.state").write_bytes(b"FLAGS123")
+    pm_worker_a = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+    pm_worker_b = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+
+    # Mesmo partindo de 122 flags com recorde global 123, pegar Parcel no Mart (5,3) deve salvar rank=5
+    fake_emu = SimpleNamespace(em=SimpleNamespace(get_state=lambda: b"PARCEL_MART"))
+    pm_worker_a.check_and_save_map_milestone(fake_emu, 122, (5, 3), env_id=0, has_parcel=True)
+    parcel_file = tmp_path / "events_122_m05_5_3.state"
+    assert parcel_file.read_bytes() == b"PARCEL_MART"
+    assert pm_worker_a._best_map_rank == 5
+
+    # Worker B deve descobrir o novo arquivo no disco ao chamar sample_state()
+    rng = random.Random(123)
+    pm_worker_b.sample_state(rng=rng)
+    assert str(parcel_file) in pm_worker_b._saved_states

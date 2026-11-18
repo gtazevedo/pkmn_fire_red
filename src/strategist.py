@@ -404,7 +404,13 @@ class Strategist:
             "prompt": prompt,
             "format": "json",
             "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 128},
+            "keep_alive": "24h",
+            "options": {
+                "temperature": 0.1,
+                "num_predict": 96,
+                "num_ctx": 512,
+                "num_gpu": 22,
+            },
         }).encode("utf-8")
 
         req = urllib.request.Request(
@@ -432,6 +438,12 @@ class Strategist:
             with self._lock:
                 self._current_goal = goal
                 self.llm_success_count += 1
+                cnt = self.llm_success_count
+            if cnt == 1 or cnt % 25 == 0:
+                log.info(
+                    f"[Strategist LLM] #{cnt} on {issued_on_map} -> "
+                    f"({goal.target_map_bank},{goal.target_map_id}) {goal.navigation_hint}: {goal.sub_goal}"
+                )
         return goal
 
     def update(

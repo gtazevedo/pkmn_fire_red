@@ -553,15 +553,20 @@ class PokemonEnv(gym.Env):
                 # Reset y bounds on map transition so entering a map doesn't give a free bonus
                 self._stats.y_min_episode = y
                 self._stats.y_max_episode = y
-                if (
-                    _cb2 == 134571445
-                    and not _script_lock
-                    and RamReader.party_level(info) > 0
-                    and RamReader.party_hp(info) > 0
-                ):
-                    self._progress.check_and_save_map_milestone(
-                        self.env, total_flags, map_key, self.env_id
-                    )
+
+            if (
+                _cb2 == 134571445
+                and not _script_lock
+                and RamReader.party_level(info) > 0
+                and RamReader.party_hp(info) >= max(1, int(RamReader.party_max_hp(info) * 0.3))
+            ):
+                self._progress.check_and_save_map_milestone(
+                    self.env,
+                    total_flags,
+                    map_key,
+                    self.env_id,
+                    has_parcel=has_parcel_now,
+                )
 
             nav_hint = self._strategist.current_goal.navigation_hint
             if nav_hint == "south":

@@ -24,14 +24,21 @@ class ProgressManager:
         (3, 1): 2,
         (5, 4): 3,
         (5, 3): 4,
-        (3, 20): 5,
-        (1, 0): 6,
-        (3, 2): 7,
-        (6, 2): 8,
-        (3, 21): 9,
-        (1, 1): 10,
-        (3, 22): 11,
-        (3, 3): 12,
+        (3, 20): 10,
+        (1, 0): 11,
+        (3, 2): 12,
+        (6, 2): 13,
+        (3, 21): 14,
+        (1, 1): 15,
+        (3, 22): 16,
+        (3, 3): 17,
+    }
+    PARCEL_PROGRESSION_RANK: dict[tuple[int, int], int] = {
+        (5, 3): 5,
+        (3, 1): 6,
+        (3, 19): 7,
+        (3, 0): 8,
+        (4, 3): 9,
     }
 
     def __init__(self, progress_dir: Optional[str] = None, state_file: Optional[str] = None):
@@ -46,6 +53,7 @@ class ProgressManager:
         self._load_best_from_disk()
 
     def sample_state(self, rng: Optional[random.Random] = None) -> str:
+        self._load_best_from_disk(quiet=True)
         chooser = rng if rng is not None else random
         if not self._saved_states:
             return CFG.state_file
@@ -138,9 +146,14 @@ class ProgressManager:
         total_flags: int,
         map_key: tuple[int, int],
         env_id: int,
+        has_parcel: bool = False,
     ) -> float:
-        rank = self.MAP_PROGRESSION_RANK.get(map_key, 0)
-        if rank == 0 or total_flags < self._best_flags_ever:
+        rank = (
+            self.PARCEL_PROGRESSION_RANK.get(map_key, 0)
+            if has_parcel
+            else self.MAP_PROGRESSION_RANK.get(map_key, 0)
+        )
+        if rank == 0 or total_flags < max(0, self._best_flags_ever - 1):
             return 0.0
         if total_flags > self._best_flags_ever or rank > self._best_map_rank:
             state_path = os.path.join(
@@ -148,18 +161,20 @@ class ProgressManager:
                 f"events_{total_flags:03d}_m{rank:02d}_{map_key[0]}_{map_key[1]}.state",
             )
             try:
-                if not os.path.exists(state_path):
+                already_exists = os.path.exists(state_path)
+                if not already_exists:
                     state_data = emulator.em.get_state()
                     with open(state_path, "wb") as f:
                         f.write(state_data)
                 if state_path not in self._saved_states:
                     self._saved_states.append(state_path)
                 self._best_flags_ever = max(self._best_flags_ever, total_flags)
-                self._best_map_rank = rank
-                log.info(
-                    f"[Env {env_id}] 🗺️ NEW MAP MILESTONE: map={map_key} rank={rank} "
-                    f"flags={total_flags} → {state_path}"
-                )
+                self._best_map_rank = max(self._best_map_rank, rank)
+                if not already_exists:
+                    log.info(
+                        f"[Env {env_id}] 🗺️ NEW MAP MILESTONE: map={map_key} rank={rank} "
+                        f"parcel={has_parcel} flags={total_flags} → {state_path}"
+                    )
             except Exception as e:
                 log.warning(f"[Env {env_id}] Falha ao salvar map milestone: {e}")
         return 0.0
@@ -181,12 +196,12 @@ class ProgressManager:
     def _state_path(self, total_flags: int) -> str:
         return os.path.join(self._progress_dir, f"events_{total_flags:03d}.state")
 
-    def _load_best_from_disk(self) -> None:
+    def _load_best_from_disk(self, quiet: bool = False) -> None:
         # Carrega states existentes do disco para o pool
         pattern = os.path.join(self._progress_dir, "events_*.state")
         files = glob.glob(pattern)
-        max_flag = 0
-        max_rank = 0
+        max_flag = self._best_flags_ever
+        max_rank = self._best_map_rank
         for f in files:
             if f not in self._saved_states:
                 self._saved_states.append(f)
@@ -204,13 +219,14 @@ class ProgressManager:
 
         self._best_flags_ever = max_flag
         self._best_map_rank = max_rank
-        if max_flag > 0:
-            log.info(
-                f"[ProgressManager] Currículo dinâmico: {len(files)} states carregados, "
-                f"recorde = {max_flag} flags (map_rank={max_rank})."
-            )
-        else:
-            log.info("[ProgressManager] Sem progresso salvo — iniciando do começo.")
+        if not quiet:
+            if max_flag > 0:
+                log.info(
+                    f"[ProgressManager] Currículo dinâmico: {len(files)} states carregados, "
+                    f"recorde = {max_flag} flags (map_rank={max_rank})."
+                )
+            else:
+                log.info("[ProgressManager] Sem progresso salvo — iniciando do começo.")
 
 
 _progress_manager: Optional[ProgressManager] = None
