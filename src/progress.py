@@ -1,5 +1,7 @@
 import os
 import math
+import glob
+import random
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Optional
@@ -10,30 +12,83 @@ from src.reader import RamReader
 
 class ProgressManager:
     """
-    Substitui os Milestones estáticos por um currículo dinâmico baseado em Event Flags.
-    Sempre que a soma das flags aumenta em 5 (ou 10), salvamos um novo state.
-    Ao iniciar um episódio, sorteamos um state dentre os já descobertos.
+    Currículo dinâmico baseado em Event Flags com amostragem priorizada (Frontier Bias).
+    Distribuição alvo (com >= 3 states):
+      - ~50% nos estados de fronteira (maior contagem de Event Flags)
+      - ~30% em estados intermediários recentes
+      - ~20% em estados iniciais (mitiga esquecimento catastrófico)
     """
-    def __init__(self):
-        os.makedirs(CFG.progress_dir, exist_ok=True)
+    def __init__(self, progress_dir: Optional[str] = None, state_file: Optional[str] = None):
+        self._progress_dir = progress_dir or CFG.progress_dir
+        os.makedirs(self._progress_dir, exist_ok=True)
         self._best_flags_ever: int = 0
-        self._saved_states: list[str] = [CFG.state_file]
-        if os.path.exists(CFG.pallet_exterior_state_file):
+        self.tier_counts: dict[str, int] = {"frontier": 0, "intermediate": 0, "initial": 0}
+        self._saved_states: list[str] = [state_file or CFG.state_file]
+        if progress_dir is None and os.path.exists(CFG.pallet_exterior_state_file):
             self._saved_states.append(CFG.pallet_exterior_state_file)
         self._load_best_from_disk()
 
+    def sample_state(self, rng: Optional[random.Random] = None) -> str:
+        chooser = rng if rng is not None else random
+        if not self._saved_states:
+            return CFG.state_file
+
+        sorted_states = sorted(self._saved_states, key=self._state_sort_key)
+        n = len(sorted_states)
+
+        if n == 1:
+            self.tier_counts["initial"] += 1
+            return sorted_states[0]
+
+        if n == 2:
+            total_p = CFG.frontier_prob + CFG.initial_prob
+            threshold = (CFG.frontier_prob / total_p) if total_p > 0 else 0.5
+            if chooser.random() < threshold:
+                self.tier_counts["frontier"] += 1
+                return sorted_states[1]
+            self.tier_counts["initial"] += 1
+            return sorted_states[0]
+
+        n_frontier = max(1, min(3, n // 3))
+        n_initial = max(1, (n - n_frontier) // 2)
+        initial_states = sorted_states[:n_initial]
+        frontier_states = sorted_states[-n_frontier:]
+        intermediate_states = sorted_states[n_initial:-n_frontier]
+
+        u = chooser.random()
+        if u < CFG.frontier_prob:
+            self.tier_counts["frontier"] += 1
+            return chooser.choice(frontier_states)
+        if u < CFG.frontier_prob + CFG.intermediate_prob:
+            self.tier_counts["intermediate"] += 1
+            return chooser.choice(intermediate_states)
+        self.tier_counts["initial"] += 1
+        return chooser.choice(initial_states)
+
     @property
     def current_state_file(self) -> str:
-        import random
-        if len(self._saved_states) <= 3:
-            return random.choice(self._saved_states)
-        # [FIX v27] Currículo enviesado: 70% nos top-3 states avançados
-        # para maximizar tentativas a partir de posições promissoras.
-        # 30% em qualquer state para manter diversidade.
-        sorted_states = sorted(self._saved_states, key=self._state_sort_key, reverse=True)
-        if random.random() < 0.70:
-            return random.choice(sorted_states[:3])
-        return random.choice(self._saved_states)
+        return self.sample_state()
+
+    @property
+    def _best_state_file(self) -> str:
+        if not self._saved_states:
+            return CFG.state_file
+        return max(self._saved_states, key=self._state_sort_key)
+
+    @property
+    def _best_milestone_idx(self) -> int:
+        return self._best_flags_ever
+
+    def stats_dict(self) -> dict:
+        total = sum(self.tier_counts.values())
+        return {
+            "progress/saved_states": len(self._saved_states),
+            "progress/best_flags_ever": self._best_flags_ever,
+            "progress/frontier_samples": self.tier_counts["frontier"],
+            "progress/intermediate_samples": self.tier_counts["intermediate"],
+            "progress/initial_samples": self.tier_counts["initial"],
+            "progress/frontier_ratio": self.tier_counts["frontier"] / max(total, 1),
+        }
 
     def check_and_save(self, emulator, total_flags: int, env_id: int) -> float:
         # Se quebrou o recorde histórico absoluto...
@@ -62,7 +117,6 @@ class ProgressManager:
     @staticmethod
     def _state_sort_key(path: str) -> int:
         """Extrai o número de flags do nome do arquivo para ordenação."""
-        import os
         basename = os.path.basename(path)
         try:
             if "events_" in basename:
@@ -75,12 +129,11 @@ class ProgressManager:
         return 0
 
     def _state_path(self, total_flags: int) -> str:
-        return os.path.join(CFG.progress_dir, f"events_{total_flags:03d}.state")
+        return os.path.join(self._progress_dir, f"events_{total_flags:03d}.state")
 
     def _load_best_from_disk(self) -> None:
         # Carrega states existentes do disco para o pool
-        import glob
-        pattern = os.path.join(CFG.progress_dir, "events_*.state")
+        pattern = os.path.join(self._progress_dir, "events_*.state")
         files = glob.glob(pattern)
         max_flag = 0
         for f in files:
@@ -113,22 +166,23 @@ def get_progress_manager() -> ProgressManager:
 
 @dataclass
 class RewardAccumulator:
-    total:     float = 0.0
-    explore:   float = 0.0
-    map_disc:  float = 0.0
-    damage:    float = 0.0
-    levelup:   float = 0.0
-    badge:     float = 0.0
-    stuck:     float = 0.0
-    time_pen:  float = 0.0
-    text:      float = 0.0
-    entry:     float = 0.0
-    milestone: float = 0.0
-    victory:   float = 0.0
-    idle_pen:  float = 0.0
-    op_lvl:    float = 0.0
-    heal:      float = 0.0
-    tactical:  float = 0.0
+    total:      float = 0.0
+    explore:    float = 0.0
+    map_disc:   float = 0.0
+    damage:     float = 0.0
+    levelup:    float = 0.0
+    badge:      float = 0.0
+    stuck:      float = 0.0
+    time_pen:   float = 0.0
+    text:       float = 0.0
+    entry:      float = 0.0
+    milestone:  float = 0.0
+    victory:    float = 0.0
+    idle_pen:   float = 0.0
+    op_lvl:     float = 0.0
+    heal:       float = 0.0
+    tactical:   float = 0.0
+    strategist: float = 0.0
 
     def add(self, component: str, value: float) -> float:
         setattr(self, component, getattr(self, component) + value)
@@ -138,25 +192,27 @@ class RewardAccumulator:
     def reset(self) -> None:
         self.total = self.explore = self.map_disc = self.damage = 0.0
         self.levelup = self.badge = self.stuck = self.time_pen = self.text = self.entry = self.milestone = 0.0
-        self.victory = self.idle_pen = self.op_lvl = self.heal = self.tactical = 0.0
+        self.victory = self.idle_pen = self.op_lvl = self.heal = self.tactical = self.strategist = 0.0
 
     def to_dict(self) -> dict:
         return {
-            "total_reward":     self.total,
-            "reward_explore":   self.explore,
-            "reward_map_disc":  self.map_disc,
-            "reward_damage":    self.damage,
-            "reward_levelup":   self.levelup,
-            "reward_badge":     self.badge,
-            "reward_stuck":     self.stuck,
-            "reward_time_pen":  self.time_pen,
-            "reward_text":      self.text,
-            "reward_entry":     self.entry,
-            "reward_milestone": self.milestone,
-            "reward_victory":   self.victory,
-            "reward_idle_pen":  self.idle_pen,
-            "reward_op_lvl":    self.op_lvl,
-            "reward_heal":      self.heal,
+            "total_reward":      self.total,
+            "reward_explore":    self.explore,
+            "reward_map_disc":   self.map_disc,
+            "reward_damage":     self.damage,
+            "reward_levelup":    self.levelup,
+            "reward_badge":      self.badge,
+            "reward_stuck":      self.stuck,
+            "reward_time_pen":   self.time_pen,
+            "reward_text":       self.text,
+            "reward_entry":      self.entry,
+            "reward_milestone":  self.milestone,
+            "reward_victory":    self.victory,
+            "reward_idle_pen":   self.idle_pen,
+            "reward_op_lvl":     self.op_lvl,
+            "reward_heal":       self.heal,
+            "reward_tactical":   self.tactical,
+            "reward_strategist": self.strategist,
         }
 
 

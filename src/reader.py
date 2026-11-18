@@ -1,9 +1,54 @@
-from src.config import CFG, log
+import numpy as np
+from src.config import CFG, GRID_SIZE, log
+
 
 class RamReader:
+    TILE_BLOCKED  = 0
+    TILE_WALKABLE = 1
+    TILE_GRASS    = 2
+    TILE_WARP     = 3
+    TILE_NPC      = 4
+
+    GRASS_METATILES = frozenset({0x008, 0x009, 0x00A, 0x00B, 0x00D, 0x015, 0x016})
+    WARP_METATILES = frozenset({
+        0x012, 0x013, 0x014, 0x01A, 0x01B, 0x01C, 0x01D, 0x01E, 0x01F,
+        0x025, 0x026, 0x027, 0x038, 0x039, 0x03A,
+        0x060, 0x061, 0x062, 0x063, 0x064, 0x065, 0x066, 0x067, 0x068, 0x069, 0x06A,
+    })
+
+    _IRAM_START = 262144
+    _BACKUP_MAP_LAYOUT_OFFSET = _IRAM_START + 0x5040
+    _OBJECT_EVENTS_OFFSET = 0x36E38
+    _OBJECT_EVENTS_COUNT = 16
+    _OBJECT_EVENT_SIZE = 36
+    _MAP_BORDER_OFFSET = 7
+
     @staticmethod
     def _clamp(val, lo: int, hi: int) -> int:
         return max(lo, min(hi, int(val)))
+
+    @staticmethod
+    def _read_u16(ram_array, idx: int) -> int:
+        return int(ram_array[idx]) | (int(ram_array[idx + 1]) << 8)
+
+    @classmethod
+    def _read_s16(cls, ram_array, idx: int) -> int:
+        val = cls._read_u16(ram_array, idx)
+        return val - 0x10000 if val >= 0x8000 else val
+
+    @staticmethod
+    def _read_u32(ram_array, idx: int) -> int:
+        return (
+            int(ram_array[idx])
+            | (int(ram_array[idx + 1]) << 8)
+            | (int(ram_array[idx + 2]) << 16)
+            | (int(ram_array[idx + 3]) << 24)
+        )
+
+    @classmethod
+    def _read_s32(cls, ram_array, idx: int) -> int:
+        val = cls._read_u32(ram_array, idx)
+        return val - 0x100000000 if val >= 0x80000000 else val
 
     @classmethod
     def coord(cls, info: dict, key: str) -> int:
@@ -161,6 +206,123 @@ class RamReader:
     def badges(cls, info: dict) -> int:
         raw = info.get("badges", 0)
         return cls._clamp(bin(int(raw)).count("1"), 0, 8)
+
+    @classmethod
+    def get_active_npcs(cls, ram_array) -> set[tuple[int, int]]:
+        """Lê gObjectEvents (EWRAM 0x02036E38) e retorna coords (x, y) de NPCs ativos."""
+        npcs: set[tuple[int, int]] = set()
+        if ram_array is None:
+            return npcs
+
+        ram_len = len(ram_array)
+        for i in range(cls._OBJECT_EVENTS_COUNT):
+            base = cls._OBJECT_EVENTS_OFFSET + i * cls._OBJECT_EVENT_SIZE
+            if ram_len <= base + 19:
+                break
+            flags = cls._read_u32(ram_array, base)
+            is_active = (flags & 0x01) != 0
+            is_player = (i == 0) or ((flags & 0x10000) != 0)
+            is_invisible = (flags & 0x2000) != 0
+            if not is_active or is_player or is_invisible:
+                continue
+
+            curr_x = cls._read_s16(ram_array, base + 16) - cls._MAP_BORDER_OFFSET
+            curr_y = cls._read_s16(ram_array, base + 18) - cls._MAP_BORDER_OFFSET
+            npcs.add((curr_x, curr_y))
+        return npcs
+
+    @classmethod
+    def get_player_coords(cls, ram_array, info: dict | None = None) -> tuple[int, int]:
+        """Obtém (x, y) reais do jogador via SaveBlock1, com fallback seguro para info."""
+        sb_x, sb_y = 0, 0
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        has_sb = wram_offset > 0 and ram_array is not None and len(ram_array) >= wram_offset + 4
+        if has_sb:
+            sb_x = cls._read_s16(ram_array, wram_offset)
+            sb_y = cls._read_s16(ram_array, wram_offset + 2)
+
+        if info is not None and "player_x" in info and "player_y" in info:
+            ix = int(info["player_x"])
+            iy = int(info["player_y"])
+            info_valid = 0 <= ix <= CFG.max_coord and 0 <= iy <= CFG.max_coord
+            if info_valid and (not has_sb or (sb_x == 0 and sb_y == 0)):
+                return ix, iy
+
+        if has_sb:
+            return sb_x, sb_y
+        return 0, 0
+
+    @classmethod
+    def get_collision_grid(
+        cls,
+        ram_array,
+        info: dict | None = None,
+        grid_size: int = GRID_SIZE,
+    ) -> np.ndarray:
+        """
+        Extrai a matriz grid_size x grid_size de colisão/warps/NPCs ao redor do jogador.
+        Valores: 0=bloqueado, 1=caminhável, 2=mato, 3=warp/porta, 4=NPC.
+        """
+        grid = np.zeros((grid_size, grid_size), dtype=np.uint8)
+        if ram_array is None or len(ram_array) < cls._BACKUP_MAP_LAYOUT_OFFSET + 12:
+            return grid
+
+        width = cls._read_s32(ram_array, cls._BACKUP_MAP_LAYOUT_OFFSET)
+        height = cls._read_s32(ram_array, cls._BACKUP_MAP_LAYOUT_OFFSET + 4)
+        map_ptr = cls._read_u32(ram_array, cls._BACKUP_MAP_LAYOUT_OFFSET + 8)
+        if width <= 0 or width > 1024 or height <= 0 or height > 1024 or (map_ptr >> 24) != 0x02:
+            return grid
+
+        map_offset = map_ptr & 0x00FFFFFF
+        px, py = cls.get_player_coords(ram_array, info)
+        active_npcs = cls.get_active_npcs(ram_array)
+        radius = grid_size // 2
+        ram_len = len(ram_array)
+
+        for row, dy in enumerate(range(-radius, radius + 1)):
+            ty = py + dy
+            gy = ty + cls._MAP_BORDER_OFFSET
+            if gy < 0 or gy >= height:
+                continue
+            for col, dx in enumerate(range(-radius, radius + 1)):
+                tx = px + dx
+                gx = tx + cls._MAP_BORDER_OFFSET
+                if gx < 0 or gx >= width:
+                    continue
+                tile_idx = map_offset + 2 * (gy * width + gx)
+                if tile_idx + 1 >= ram_len:
+                    continue
+
+                entry = cls._read_u16(ram_array, tile_idx)
+                metatile_id = entry & 0x03FF
+                collision = (entry >> 10) & 0x03
+
+                if metatile_id == 0x03FF:
+                    tile = cls.TILE_BLOCKED
+                elif (tx, ty) in active_npcs:
+                    tile = cls.TILE_NPC
+                elif metatile_id in cls.WARP_METATILES:
+                    tile = cls.TILE_WARP
+                elif collision != 0:
+                    tile = cls.TILE_BLOCKED
+                elif metatile_id in cls.GRASS_METATILES:
+                    tile = cls.TILE_GRASS
+                else:
+                    tile = cls.TILE_WALKABLE
+
+                grid[row, col] = tile
+
+        return grid
+
+    @classmethod
+    def get_collision_grid_normalized(
+        cls,
+        ram_array,
+        info: dict | None = None,
+        grid_size: int = GRID_SIZE,
+    ) -> np.ndarray:
+        """Retorna matriz 9x9 normalizada em [0.0, 1.0] float32 para observação neural."""
+        return cls.get_collision_grid(ram_array, info=info, grid_size=grid_size).astype(np.float32) / 4.0
 
     @staticmethod
     def debug_dump(info: dict, env_id: int, label: str) -> None:

@@ -2,26 +2,50 @@ import os
 import logging
 import numpy as np
 from dataclasses import dataclass
-import retro
+
+try:
+    import retro
+except ImportError:  # pragma: no cover - allows unit testing without retro installed
+    retro = None
+
 # [FIX v22] RAM obs expandido: +3 para Sixth Sense (potions, tms, p1_status) = 23
 RAM_SIZE = 12 + 5 + 3 + 3   # = 23
+GRID_SIZE = 9               # Matriz local 9x9 de colisão e warps
+GOAL_SIZE = 6               # Embedding do sub-objetivo estratégico (4 priority one-hot + map_id + nav_hint)
+
+
+def _default_state_file() -> str:
+    if retro is not None:
+        return os.path.join(
+            os.path.dirname(retro.__file__),
+            "data", "stable", "PokemonFireRed", "Start.state.gz",
+        )
+    return "./progress_states/Start.state.gz"
+
+
+def _default_base_save_dir() -> str:
+    env_dir = os.getenv("PKMN_SAVE_DIR")
+    if env_dir:
+        return env_dir
+    preferred = "/mnt/d/projects/pkmn_fire_red_saves"
+    if os.path.isdir(preferred) or os.path.isdir("/mnt/d"):
+        return preferred
+    return "./saves"
+
 
 @dataclass(frozen=True)
 class Config:
     """Todos os parâmetros tuneáveis em um lugar. Frozen para evitar mutação."""
 
     # --- paths ---
-    state_file: str = os.path.join(
-        os.path.dirname(retro.__file__),
-        "data", "stable", "PokemonFireRed", "Start.state.gz",
-    )
+    state_file: str = _default_state_file()
     # [FIX v18] Save state exterior: ponto de partida alternativo já fora da casa
     pallet_exterior_state_file: str = "./progress_states/pallet_exterior.state"
     # Probabilidade de iniciar do exterior (quando o state existir)
     exterior_start_ratio: float = 0.60
     
-    # Caminho base configurável via env var, mas com fallback para o D: para NÃO QUEBRAR
-    base_save_dir: str = os.getenv("PKMN_SAVE_DIR", "/mnt/d/projects/pkmn_fire_red_saves")
+    # Caminho base configurável via env var, com fallback seguro fora do WSL/Windows
+    base_save_dir: str = _default_base_save_dir()
     model_path:          str = f"{base_save_dir}/pokemon_lstm_model"
     checkpoint_dir:      str = f"{base_save_dir}/checkpoints/"
     progress_dir:        str = "./progress_states/"
@@ -29,11 +53,24 @@ class Config:
     log_file:            str = f"{base_save_dir}/pokemon_training.log"
     whiteout_frame_dir:  str = f"{base_save_dir}/whiteout_frames/"
 
-    # [FIX v26b] config_stamp bumped — Fix do bypass hardcoded de +0.5 no advisor.py
-    config_stamp:        str = "v29_gen6_holy_grail"
+    # [FIX v30] Strategist + Frontier Bias + Matriz de Colisão 9x9 (weight surgery compatível)
+    config_stamp:        str = "v30_hrl_strategist_grid9x9"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
+
+    # --- curriculum sampling (Frontier Bias) ---
+    frontier_prob:       float = 0.50
+    intermediate_prob:   float = 0.30
+    initial_prob:        float = 0.20
+
+    # --- strategist & advisor ---
+    ollama_url:                  str   = "http://localhost:11434/api/generate"
+    ollama_model:                str   = "qwen2.5:7b"
+    ollama_timeout_sec:          float = 3.0
+    strategist_stagnation_steps: int   = 500
+    strategist_goal_bonus:       float = 3.0
+    dialog_repeat_penalty:       float = -0.001
 
     # --- training ---
     num_cpu:         int   = 6
@@ -197,14 +234,19 @@ CFG = Config()
 FRAMES_PER_STEP = CFG.frames_held + CFG.frames_noop
 
 def setup_logging() -> logging.Logger:
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        log_dir = os.path.dirname(CFG.log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        handlers.insert(0, logging.FileHandler(CFG.log_file, mode="a"))
+    except OSError:
+        pass
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(CFG.log_file, mode="a"),
-            logging.StreamHandler(),
-        ],
+        handlers=handlers,
     )
     return logging.getLogger("pokemon_rl")
 

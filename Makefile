@@ -1,4 +1,4 @@
-.PHONY: train enjoy clean ui info
+.PHONY: train tune enjoy ui test eval clean info
 
 # Inicia o treinamento
 train:
@@ -15,6 +15,14 @@ enjoy:
 # Abre a interface gráfica do MLflow no navegador
 ui:
 	~/.local/bin/poetry run mlflow ui --backend-store-uri sqlite:///mlflow.db -h 127.0.0.1 -p 5000
+
+# Executa testes unitários
+test:
+	~/.local/bin/poetry run pytest -v
+
+# Avalia o modelo atual e registra métricas no MLflow
+eval:
+	~/.local/bin/poetry run python -m scripts.evaluate_mlflow
 
 # Limpa caches do python
 clean:

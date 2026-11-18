@@ -1,4 +1,5 @@
 import numpy as np
+from src.config import CFG
 
 class RamAdvisor:
     """
@@ -61,6 +62,13 @@ class RamAdvisor:
         self.total_bonus         = 0.0
         self.hints_matched       = 0
         self._last_decoded_text  = ""
+        self.seen_dialogues: set[str] = set()
+        self.recent_dialogues: list[str] = []
+        self.repeat_penalties: int = 0
+
+    @property
+    def last_decoded_text(self) -> str:
+        return self._last_decoded_text
 
     @classmethod
     def decode_ram_text(cls, ram_slice) -> str:
@@ -81,6 +89,7 @@ class RamAdvisor:
         decoded_text = ""
 
         text_changed = False
+        repeat_penalty = 0.0
         # Só lê o EWRAM de texto se o jogador estiver travado numa animação/script de NPC ou na batalha.
         # Isso previne o "text farming exploit", onde o agente ficava apertando "A" para o vento lendo o lixo na RAM.
         if (script_lock or in_battle) and ram_array is not None and len(ram_array) > 138520 + 256:
@@ -89,6 +98,20 @@ class RamAdvisor:
             decoded_text = self.decode_ram_text(dialogue_bytes)
             text_changed = (decoded_text != self._last_decoded_text)
             self._last_decoded_text = decoded_text
+
+            norm_text = decoded_text.strip()
+            if norm_text and text_changed:
+                if not self.recent_dialogues or self.recent_dialogues[-1] != norm_text:
+                    self.recent_dialogues.append(norm_text)
+                    if len(self.recent_dialogues) > 5:
+                        self.recent_dialogues.pop(0)
+                if norm_text in self.seen_dialogues:
+                    repeat_penalty = CFG.dialog_repeat_penalty
+                    self.repeat_penalties += 1
+                else:
+                    self.seen_dialogues.add(norm_text)
+        else:
+            self._last_decoded_text = ""
 
         # Classifica a situação usando regras de texto se o texto existir
         if decoded_text.strip():
@@ -131,7 +154,7 @@ class RamAdvisor:
         self._last_situation    = situation
         self._current_situation = situation
 
-        return self._compute_bonus(situation, action_idx, text_changed)
+        return self._compute_bonus(situation, action_idx, text_changed) + repeat_penalty
 
     def get_embedding(self) -> np.ndarray:
         sit = self._current_situation
@@ -168,6 +191,9 @@ class RamAdvisor:
         self.hints_matched      = 0
         self.total_bonus        = 0.0
         self._last_decoded_text  = ""
+        self.seen_dialogues.clear()
+        self.recent_dialogues.clear()
+        self.repeat_penalties   = 0
 
     def stats_dict(self) -> dict:
         return {
@@ -179,6 +205,7 @@ class RamAdvisor:
             "advisor/move_select_steps": self.total_move_select_steps,
             "advisor/hints_matched":  self.hints_matched,
             "advisor/total_bonus":    self.total_bonus,
+            "advisor/repeat_penalties": self.repeat_penalties,
         }
 
     MAX_TEXT_BONUS = 50.0  # Limite máximo de bônus ganho por textos por episódio

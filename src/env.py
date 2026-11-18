@@ -4,12 +4,16 @@ from typing import Optional
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-import retro
+try:
+    import retro
+except ImportError:  # pragma: no cover
+    retro = None
 import cv2
 
-from src.config import CFG, RAM_SIZE, log, ActionSpace
+from src.config import CFG, GOAL_SIZE, GRID_SIZE, RAM_SIZE, log, ActionSpace
 from src.reader import RamReader
 from src.advisor import RamAdvisor
+from src.strategist import Strategist
 from src.progress import EpisodeStats, RewardAccumulator, get_progress_manager
 from src.vision import VisionEngine, GameState
 
@@ -20,6 +24,8 @@ class PokemonEnv(gym.Env):
 
     def __init__(self, env_id: int = 0):
         super().__init__()
+        if retro is None:
+            raise ImportError("stable-retro é necessário para instanciar PokemonEnv")
         self.env_id = env_id
         self.env    = retro.make(game="PokemonFireRed", state=None)
         self._total_steps_ref: list[int] = [0]
@@ -27,15 +33,18 @@ class PokemonEnv(gym.Env):
 
         self.action_space = spaces.Discrete(ActionSpace.size())
         self.observation_space = spaces.Dict({
-            "image": spaces.Box(0, 255, (84, 84, 1), dtype=np.uint8),
-            "ram":   spaces.Box(0.0, 1.0, (RAM_SIZE,), dtype=np.float32),
+            "image":          spaces.Box(0, 255, (84, 84, 1), dtype=np.uint8),
+            "ram":            spaces.Box(0.0, 1.0, (RAM_SIZE,), dtype=np.float32),
+            "collision_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+            "goal":           spaces.Box(0.0, 1.0, (GOAL_SIZE,), dtype=np.float32),
         })
 
-        self._stats    = EpisodeStats()
-        self._rewards  = RewardAccumulator()
-        self._advisor  = RamAdvisor()
-        self._progress = get_progress_manager()
-        self._vision   = VisionEngine()
+        self._stats      = EpisodeStats()
+        self._rewards    = RewardAccumulator()
+        self._advisor    = RamAdvisor()
+        self._strategist = Strategist(advisor=self._advisor)
+        self._progress   = get_progress_manager()
+        self._vision     = VisionEngine()
 
         self._episode_num: int = 0
         self._last_raw_frame: Optional[np.ndarray] = None
@@ -121,9 +130,11 @@ class PokemonEnv(gym.Env):
         ], dtype=np.float32)
 
         return {
-            "image": self._to_gray_84(raw_frame),
-            "ram":   np.concatenate([base_ram, text_ram, idle_ratio,
-                                     outcome_potential, steps_in_battle_norm]),
+            "image":          self._to_gray_84(raw_frame),
+            "ram":            np.concatenate([base_ram, text_ram, idle_ratio,
+                                              outcome_potential, steps_in_battle_norm]),
+            "collision_grid": RamReader.get_collision_grid_normalized(ram, info),
+            "goal":           self._strategist.get_goal_embedding(),
         }
 
     def _warm_up(self, n: int = 10) -> tuple:
@@ -275,7 +286,8 @@ class PokemonEnv(gym.Env):
             raw_frame, info = self._warm_up(n=5)
 
         RamReader.debug_dump(info, self.env_id, "POST-RESET")
-        self._stats.reset(info, ram_array=self.env.get_ram())
+        ram_post_reset = self.env.get_ram()
+        self._stats.reset(info, ram_array=ram_post_reset)
         # [FIX v20] Override max_event_sum com o valor correto do arquivo para evitar +2000 pontos no step 1
         self._stats.max_event_sum = max(self._stats.max_event_sum, base_flags)
         
@@ -283,6 +295,7 @@ class PokemonEnv(gym.Env):
         self._stats._farm_ratio_threshold = self._farm_ratio_threshold
         self._rewards.reset()
         self._advisor.reset()
+        self._strategist.reset(info, ram_array=ram_post_reset)
         self._last_raw_frame = raw_frame
 
         # [FIX v15-Stairs] Reset do controle de loop
@@ -384,6 +397,10 @@ class PokemonEnv(gym.Env):
         if event_bonus > 0:
             step_reward += self._rewards.add("milestone", event_bonus)
             self._progress.check_and_save(self.env, total_flags, self.env_id)
+
+        strategist_bonus = self._strategist.update(info, ram_array, _in_battle_now, total_flags)
+        if strategist_bonus != 0.0:
+            step_reward += self._rewards.add("strategist", strategist_bonus)
 
         x        = RamReader.coord(info, "player_x")
         y        = RamReader.coord(info, "player_y")
@@ -590,20 +607,30 @@ class PokemonEnv(gym.Env):
 
         if done:
             advisor_stats = self._advisor.stats_dict()
+            strategist_stats = self._strategist.stats_dict()
             info["episode_metrics"] = {
                 **self._stats.to_dict(ms),
                 **self._rewards.to_dict(),
-                "max_steps_used":        ms,
-                "advisor_dialog_steps":  advisor_stats["advisor/dialog_steps"],
-                "advisor_battle_steps":  advisor_stats["advisor/battle_steps"],
-                "advisor_move_select_steps": advisor_stats["advisor/move_select_steps"],
-                "advisor_hints_match":   advisor_stats["advisor/hints_matched"],
-                "advisor_text_bonus":    advisor_stats["advisor/total_bonus"],
-                "total_tiles_ever":      len(self._stats.persistent_tile_visits),
-                "total_maps_ever":       len(self._stats.all_maps_visited),
-                "best_milestone":        self._progress._best_flags_ever,
-                "farm_detected":         int(self._stats.farm_detected),
-                "farm_detections":       self._stats.farm_detections,
+                "max_steps_used":             ms,
+                "advisor_dialog_steps":       advisor_stats["advisor/dialog_steps"],
+                "advisor_battle_steps":       advisor_stats["advisor/battle_steps"],
+                "advisor_move_select_steps":  advisor_stats["advisor/move_select_steps"],
+                "advisor_hints_match":        advisor_stats["advisor/hints_matched"],
+                "advisor_text_bonus":         advisor_stats["advisor/total_bonus"],
+                "advisor_repeat_penalties":   advisor_stats["advisor/repeat_penalties"],
+                "strategist_queries_count":   strategist_stats["strategist/queries_count"],
+                "strategist_llm_success":     strategist_stats["strategist/llm_success_count"],
+                "strategist_goal_alignments": strategist_stats["strategist/goal_alignments"],
+                "strategist_alignment_bonus": strategist_stats["strategist/alignment_bonus"],
+                "total_tiles_ever":           len(self._stats.persistent_tile_visits),
+                "total_maps_ever":            len(self._stats.all_maps_visited),
+                "best_milestone":             self._progress._best_flags_ever,
+                "farm_detected":              int(self._stats.farm_detected),
+                "farm_detections":            self._stats.farm_detections,
             }
 
         return obs_dict, step_reward, done, False, info
+
+    def close(self):
+        self._strategist.close()
+        self.env.close()

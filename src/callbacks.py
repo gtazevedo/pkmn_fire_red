@@ -28,6 +28,7 @@ class MLflowOutputFormat(KVWriter):
 from src.config import CFG, log, RAM_SIZE, FRAMES_PER_STEP
 from src.env import PokemonEnv
 from src.progress import ProgressManager
+from src.surgery import upgrade_checkpoint_if_needed
 
 class PokemonCallback(BaseCallback):
     """
@@ -156,6 +157,7 @@ class PokemonCallback(BaseCallback):
         self.logger.record("reward/from_stuck_pen",  m["reward_stuck"])
         self.logger.record("reward/from_time_pen",   m["reward_time_pen"])
         self.logger.record("reward/from_text",       m["reward_text"])
+        self.logger.record("reward/from_strategist", m.get("reward_strategist", 0.0))
 
     def _record_game(self, m: dict) -> None:
         self.logger.record("game/unique_tiles",      m["unique_tiles"])
@@ -164,6 +166,9 @@ class PokemonCallback(BaseCallback):
         self.logger.record("game/episode_steps",     m["steps"])
         self.logger.record("game/stuck_steps_ratio", m["stuck_steps_ratio"])
         self.logger.record("game/best_milestone",    m["best_milestone"])
+        self.logger.record("strategist/queries_count",   m.get("strategist_queries_count", 0))
+        self.logger.record("strategist/goal_alignments", m.get("strategist_goal_alignments", 0))
+        self.logger.record("advisor/repeat_penalties",   m.get("advisor_repeat_penalties", 0))
 
     def _record_trends(self) -> None:
         if len(self._hist["reward"]) < 5:
@@ -373,12 +378,23 @@ class Trainer:
                     saved_stamp = f.read().strip()
 
             if saved_stamp != CFG.config_stamp:
+                vecnorm_path = CFG.model_path + "_vecnorm.pkl"
+                if upgrade_checkpoint_if_needed(
+                    model_zip_path=self._model_file,
+                    vecnorm_path=vecnorm_path,
+                    stamp_path=stamp_file,
+                    target_obs_space=self._env.observation_space,
+                    target_stamp=CFG.config_stamp,
+                ):
+                    saved_stamp = CFG.config_stamp
+                    log.info(f"Checkpoint upgraded surgically to '{CFG.config_stamp}'")
+
+            if saved_stamp != CFG.config_stamp:
                 log.warning(
                     f"Stale checkpoint detected!\n"
                     f"  Saved stamp  : '{saved_stamp}'\n"
                     f"  Current stamp: '{CFG.config_stamp}'\n"
-                    f"RAM_SIZE=20, VecNormalize, first_strike_bonus, BugFix A+B (v14).\n"
-                    f"Deletando checkpoint stale e iniciando do zero."
+                    f"Incompatível com cirurgia automática — deletando e iniciando do zero."
                 )
                 os.remove(self._model_file)
                 vecnorm_path = CFG.model_path + "_vecnorm.pkl"
