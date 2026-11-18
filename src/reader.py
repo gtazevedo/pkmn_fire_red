@@ -69,14 +69,40 @@ class RamReader:
         if len(ram_array) <= ptr_idx + 3:
             return 0
             
-        b1, b2, b3, b4 = int(ram_array[ptr_idx]), int(ram_array[ptr_idx+1]), int(ram_array[ptr_idx+2]), int(ram_array[ptr_idx+3])
-        ptr_val = b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)
+        ptr_val = cls._read_u32(ram_array, ptr_idx)
         
         # WRAM address check (e.g. 0x02025eb4)
         if (ptr_val >> 24) != 0x02:
             return 0
             
         return ptr_val & 0x00FFFFFF
+
+    @classmethod
+    def get_saveblock2_ptr(cls, ram_array) -> int:
+        """Retorna o offset do SaveBlock2 na WRAM (IRAM 0x0300500C)."""
+        if ram_array is None:
+            return 0
+        ptr_idx = cls._IRAM_START + 0x500C
+        if len(ram_array) <= ptr_idx + 3:
+            return 0
+        ptr_val = cls._read_u32(ram_array, ptr_idx)
+        if (ptr_val >> 24) != 0x02:
+            return 0
+        return ptr_val & 0x00FFFFFF
+
+    @classmethod
+    def get_encryption_key(cls, ram_array) -> int:
+        """Retorna a chave XOR de 16 bits em SaveBlock2 + 0x0F20."""
+        sb2 = cls.get_saveblock2_ptr(ram_array)
+        if sb2 == 0 or len(ram_array) <= sb2 + 0x0F21:
+            return 0
+        return cls._read_u16(ram_array, sb2 + 0x0F20)
+
+    @classmethod
+    def is_in_battle(cls, info: dict) -> bool:
+        """Detecta batalha ativa via ponteiro gMain_callback2 (CB2_InitBattle/CB2_BattleMain)."""
+        cb2 = int(info.get("gMain_callback2", 0))
+        return 0x08010000 <= cb2 < 0x08018000
 
     @classmethod
     def event_flags_sum(cls, ram_array) -> int:
@@ -124,33 +150,54 @@ class RamReader:
     @classmethod
     def get_potions_count(cls, ram_array) -> int:
         wram_offset = cls.get_saveblock1_ptr(ram_array)
-        if wram_offset == 0: return 0
-        items_start = wram_offset + 0x02B8
-        if len(ram_array) <= items_start + (42 * 4): return 0
-        
-        total_potions = 0
-        for i in range(42):
-            idx = items_start + i * 4
-            item_id = int(ram_array[idx]) | (int(ram_array[idx+1]) << 8)
-            item_qty = int(ram_array[idx+2]) | (int(ram_array[idx+3]) << 8)
-            if item_id == 13: # 13 = Potion no Fire Red
-                total_potions += item_qty
+        if wram_offset == 0:
+            return 0
+
+        enc_key = cls.get_encryption_key(ram_array)
+        potion_ids = (13, 14, 15, 16, 17)
+
+        def _scan_potions(base_offset: int, decrypt: bool) -> int:
+            if len(ram_array) <= base_offset + (42 * 4):
+                return 0
+            total = 0
+            for i in range(42):
+                idx = base_offset + i * 4
+                item_id = cls._read_u16(ram_array, idx)
+                raw_qty = cls._read_u16(ram_array, idx + 2)
+                item_qty = (raw_qty ^ enc_key) if (decrypt and enc_key != 0) else raw_qty
+                if item_id in potion_ids and 0 < item_qty <= 999:
+                    total += item_qty
+            return total
+
+        total_potions = _scan_potions(wram_offset + 0x0310, decrypt=True)
+        if total_potions == 0 and enc_key == 0:
+            total_potions = _scan_potions(wram_offset + 0x02B8, decrypt=False)
         return total_potions
 
     @classmethod
     def get_tms_count(cls, ram_array) -> int:
         wram_offset = cls.get_saveblock1_ptr(ram_array)
-        if wram_offset == 0: return 0
-        tms_start = wram_offset + 0x040C
-        if len(ram_array) <= tms_start + (58 * 4): return 0
-        
-        total_tms = 0
-        for i in range(58):
-            idx = tms_start + i * 4
-            item_id = int(ram_array[idx]) | (int(ram_array[idx+1]) << 8)
-            item_qty = int(ram_array[idx+2]) | (int(ram_array[idx+3]) << 8)
-            if item_id != 0 and item_qty > 0:
-                total_tms += item_qty
+        if wram_offset == 0:
+            return 0
+
+        enc_key = cls.get_encryption_key(ram_array)
+
+        def _scan_tms(base_offset: int, decrypt: bool) -> int:
+            if len(ram_array) <= base_offset + (58 * 4):
+                return 0
+            total = 0
+            for i in range(58):
+                idx = base_offset + i * 4
+                item_id = cls._read_u16(ram_array, idx)
+                raw_qty = cls._read_u16(ram_array, idx + 2)
+                item_qty = (raw_qty ^ enc_key) if (decrypt and enc_key != 0) else raw_qty
+                if item_id != 0 and 0 < item_qty <= 99:
+                    total += item_qty
+            return total
+
+        total_tms = _scan_tms(wram_offset + 0x0464, decrypt=True)
+        if total_tms == 0 and enc_key == 0:
+            total_tms = _scan_tms(wram_offset + 0x040C, decrypt=False)
         return total_tms
 
     @classmethod

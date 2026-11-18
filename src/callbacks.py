@@ -53,10 +53,11 @@ class PokemonCallback(BaseCallback):
 
         self._total_episodes  = 0
         self._last_log_step   = 0
-        self._training_start: float = None
+        self._training_start: float = time.time()
 
     def _on_training_start(self) -> None:
-        self._training_start = time.time()
+        if self._training_start is None:
+            self._training_start = time.time()
         log.info("Training started.")
 
     def _current_phase(self) -> int:
@@ -114,6 +115,7 @@ class PokemonCallback(BaseCallback):
         self.logger.record("progress/party_level",     m["party_level"])
         self.logger.record("progress/total_maps_ever", m["total_maps_ever"])
         self.logger.record("progress/total_tiles_ever",m["total_tiles_ever"])
+        self.logger.record("progress/frontier_ratio",  m.get("frontier_ratio", 0.0))
 
     def _record_battle(self, m: dict) -> None:
         win_rate = m["victories"] / max(m["battles_fought"], 1)
@@ -421,6 +423,7 @@ class Trainer:
                 model.learning_rate = lr_schedule
                 model.batch_size    = CFG.batch_size
                 model.n_epochs      = CFG.n_epochs
+                model.ent_coef      = CFG.ent_coef
                 log.info(
                     f"Resumed at step {model.num_timesteps:,} → "
                     f"phase {self._current_phase()}  "

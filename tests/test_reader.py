@@ -174,3 +174,28 @@ def test_enrich_info_from_ram_party_enemy_coords_and_badges():
     assert RamReader.max_enemy_level(enriched) == 14
     assert RamReader.badges(enriched) == 3
     assert RamReader.get_p1_status(ram) == 1
+
+
+def test_battle_callback_and_encrypted_bag_pockets():
+    assert RamReader.is_in_battle({"gMain_callback2": 0x080565B5}) is False
+    assert RamReader.is_in_battle({"gMain_callback2": 0x08010509}) is True
+    assert RamReader.is_in_battle({"gMain_callback2": 0x08011101}) is True
+
+    sb1_off = 0x02557C
+    sb2_off = 0x0245D8
+    enc_key = 0x5250
+    ram = _make_ram(sb1_offset=sb1_off)
+    struct.pack_into("<I", ram, 262144 + 0x500C, 0x02000000 | sb2_off)
+    struct.pack_into("<I", ram, sb2_off + 0x0F20, enc_key)
+
+    assert RamReader.get_saveblock2_ptr(ram) == sb2_off
+    assert RamReader.get_encryption_key(ram) == enc_key
+
+    # bagPocket_Items em 0x0310: 1 Potion (13) e 2 Super Potions (14) XORadas com enc_key
+    struct.pack_into("<HH", ram, sb1_off + 0x0310, 13, 1 ^ enc_key)
+    struct.pack_into("<HH", ram, sb1_off + 0x0310 + 4, 14, 2 ^ enc_key)
+    assert RamReader.get_potions_count(ram) == 3
+
+    # bagPocket_TMHM em 0x0464: 1 TM (289) XORado com enc_key
+    struct.pack_into("<HH", ram, sb1_off + 0x0464, 289, 1 ^ enc_key)
+    assert RamReader.get_tms_count(ram) == 1

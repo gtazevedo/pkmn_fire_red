@@ -325,6 +325,7 @@ class EpisodeStats:
         self.farm_detections             = 0
         self.first_strike_paid           = False
         self.steps_in_battle_current     = 0
+        self.explore_rewards_per_map     = defaultdict(float)
         
         self.max_event_sum = RamReader.event_flags_sum(ram_array)
 
@@ -353,7 +354,12 @@ class EpisodeStats:
             return diff * 40.0, total_flags
         return 0.0, total_flags
 
-    def update_exploration(self, tile: tuple, map_key: tuple) -> tuple[float, bool]:
+    def update_exploration(
+        self,
+        tile: tuple,
+        map_key: tuple,
+        include_new_map_bonus: bool = True,
+    ) -> tuple[float, bool]:
         if map_key != getattr(self, '_last_map_for_stuck', None):
             self._last_map_for_stuck = map_key
             self.steps_on_cur_tile   = 0
@@ -409,10 +415,10 @@ class EpisodeStats:
 
         # PWhiddy philosophy: No stale_map_penalty here. If fully explored, just gives 0 points.
 
-        if is_new_map_ever:
-            # [FIX v11-I] new_map_bonus diferenciado por bank
+        if include_new_map_bonus and is_new_map_ever:
+            # [FIX v11-I / v30b] new_map_bonus diferenciado por bank (exterior/route = bank 3)
             map_bank = map_key[0]
-            bonus = CFG.new_map_bonus if map_bank != 4 else CFG.new_map_bonus_route
+            bonus = CFG.new_map_bonus_route if map_bank == 3 else CFG.new_map_bonus
             base_r += bonus
 
         return base_r, is_new_map

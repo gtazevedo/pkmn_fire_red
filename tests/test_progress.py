@@ -107,3 +107,20 @@ def test_episode_stats_monotonic_events_and_reward_accumulator():
     acc.reset()
     assert acc.total == 0.0
     assert acc.strategist == 0.0
+
+
+def test_explore_rewards_per_map_resets_between_episodes():
+    stats = EpisodeStats()
+    stats.reset({})
+    map_key = (4, 0)  # interior cap = 50.0
+    # Satura o cap de exploração no episódio 1
+    for x in range(30):
+        stats.update_exploration((4, 0, x, 0), map_key, include_new_map_bonus=False)
+    assert stats.explore_rewards_per_map[map_key] == CFG.map_explore_cap_interior
+
+    # No episódio 2, explore_rewards_per_map deve resetar e voltar a pontuar tiles visitados
+    stats.reset({})
+    assert stats.explore_rewards_per_map == {}
+    rew, is_new = stats.update_exploration((4, 0, 99, 99), map_key, include_new_map_bonus=False)
+    assert is_new is True
+    assert rew > 0.0

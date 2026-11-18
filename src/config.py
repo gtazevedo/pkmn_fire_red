@@ -80,9 +80,8 @@ class Config:
     n_epochs:        int   = 4
     gamma:           float = 0.997
     gae_lambda:      float = 0.95
-    # [FIX v15] ent_coef 0.08→0.015: entropia muito alta (0.08) impedia
-    # sequências de botões complexas (FIGHT→ataque). 0.015 é mais equilibrado.
-    ent_coef:        float = 0.08
+    # [FIX v15 / v30b] ent_coef 0.08→0.02: permite sequências de batalha FIGHT→ataque
+    ent_coef:        float = 0.02
     lr_start:        float = 1e-4
     lr_end:          float = 1e-4
     lr_total_budget: int   = 50_000_000
@@ -110,8 +109,8 @@ class Config:
     # [FIX v18.3] Remoção do medo do tempo (Whiddy-style).
     # Como não perdemos mais tempo passivamente, o limite de passos cuida da inércia.
     # [FIX v18.4] Reativado levemente o time_penalty para causar inércia desconfortável e forçar movimento
-    # [FIX v24] Zerado o time_penalty para devolver a curiosidade infantil ao agente
-    time_penalty:    float = -0.01
+    # [FIX v24 / v30b] Zerado o time_penalty (Whiddy-Pure)
+    time_penalty:    float = 0.0
     # [FIX v26] Whiddy-Pure: explore_weight é a ÚNICA fonte primária de dopamina
     explore_weight:  float = 3.0
     # [FIX v27] Bônus extra por tile novo em mapas exteriores (bank=3, routes)
@@ -199,8 +198,8 @@ class Config:
     stuck_threshold:      int   = 150
     stuck_penalty:        float = -0.08
 
-    # [FIX v26] Whiddy-Pure: zerado north_bonus (redundante com explore_weight=3.0)
-    north_bonus_per_tile: float = 2.0
+    # [FIX v30b] Reduzido north_bonus_per_tile (2.0 → 0.5) para priorizar exploração e batalhas
+    north_bonus_per_tile: float = 0.5
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
     # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante

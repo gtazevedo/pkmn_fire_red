@@ -93,10 +93,7 @@ class PokemonEnv(gym.Env):
             RamReader.coord(info, "player_y")  / CFG.max_coord,
             RamReader.map_id(info)             / CFG.max_map_id,
             RamReader.map_bank(info)           / CFG.max_map_id,
-            # Pass 0 for in_battle since we don't have cv_state here easily,
-            # the agent doesn't need to know it's in battle, the environment does.
-            # But let's just pass 0.0 to avoid breaking observation shape.
-            0.0, 
+            float(RamReader.is_in_battle(info)),
             # Use RAM for script lock if available, but CV overrides later
             float(info.get('script_lock', 0)),
             float(RamReader.player_moving(info)),
@@ -343,30 +340,47 @@ class PokemonEnv(gym.Env):
         raw_frame, pooled, info  = self._run_action(action)
         self._last_raw_frame     = raw_frame
 
-        # [CV Pipeline]
+        # [CV Pipeline + RAM Battle Detection]
+        ram_array = self.env.get_ram()
+        RamReader.enrich_info_from_ram(info, ram_array)
         cv_state = self._vision.detect_state(raw_frame)
         _not_in_overworld = (info.get("gMain_callback2", 0) != 134571445)
-        _in_battle_now = (cv_state == GameState.BATTLE) and _not_in_overworld
+        _in_battle_now = RamReader.is_in_battle(info) or ((cv_state == GameState.BATTLE) and _not_in_overworld)
         _is_whiteout   = (cv_state == GameState.WHITEOUT)
         _script_lock   = bool(info.get('script_lock', 0)) or (cv_state == GameState.DIALOGUE)
 
-        # [FIX v22] Tactical Macro Execution
+        # [FIX v22 / v30b] Tactical Macro Execution com anti-farming real
         macro_reward = 0.0
         if action_name == "TACTICAL_MACRO":
-            ram_array = self.env.get_ram()
             potions = RamReader.get_potions_count(ram_array)
             tms = RamReader.get_tms_count(ram_array)
-            
-            if _in_battle_now and potions > 0:
-                # Executa a Macro de Poção (Botão Tático)
+            cur_hp = RamReader.party_hp(info)
+            max_hp = max(RamReader.party_max_hp(info), 1)
+
+            if _in_battle_now and potions > 0 and cur_hp < max_hp * 0.5:
+                # Executa a Macro de Poção (Botão Tático) somente com HP < 50%
                 self._run_potion_macro()
-                macro_reward += 100.0
-                log.info(f"[Env {self.env_id}] 💊 TACTICAL MACRO SUCCESS: Potion Triggered!")
+                ram_after = self.env.get_ram()
+                RamReader.enrich_info_from_ram(info, ram_after)
+                potions_after = RamReader.get_potions_count(ram_after)
+                hp_after = RamReader.party_hp(info)
+                if potions_after < potions or hp_after > cur_hp:
+                    macro_reward += 100.0
+                    log.info(f"[Env {self.env_id}] 💊 TACTICAL MACRO SUCCESS: Potion Triggered! ({cur_hp}->{hp_after} HP)")
+                else:
+                    macro_reward -= 0.05
+                ram_array = ram_after
             elif not _in_battle_now and tms > 0:
                 # Executa a Macro de TM e Reordenação (Botão Tático)
                 self._run_tm_macro()
-                macro_reward += 500.0
-                log.info(f"[Env {self.env_id}] 💿 TACTICAL MACRO SUCCESS: TM Teaching Triggered!")
+                ram_after = self.env.get_ram()
+                RamReader.enrich_info_from_ram(info, ram_after)
+                if RamReader.get_tms_count(ram_after) < tms:
+                    macro_reward += 500.0
+                    log.info(f"[Env {self.env_id}] 💿 TACTICAL MACRO SUCCESS: TM Teaching Triggered!")
+                else:
+                    macro_reward -= 0.05
+                ram_array = ram_after
             else:
                 # [FIX v23] Punição leve para queimar a mão do agente se ele spammar o botão no vazio
                 macro_reward -= 0.05
@@ -388,8 +402,6 @@ class PokemonEnv(gym.Env):
         # Ficar em diálogos ("Gary wants to battle") gasta tempo e reduz a recompensa.
         # Isso ensina o agente a avançar os textos rapidamente.
         step_reward += self._rewards.add("time_pen", CFG.time_penalty)
-        ram_array       = self.env.get_ram()
-        RamReader.enrich_info_from_ram(info, ram_array)
         text_bonus      = self._advisor.update(_in_battle_now, _script_lock, action_idx, ram_array)
         step_reward    += self._rewards.add("text", text_bonus)
 
@@ -479,7 +491,10 @@ class PokemonEnv(gym.Env):
             if not is_interior:
                 step_reward += self._rewards.add("milestone", CFG.outdoor_sustain_bonus)
 
-            explore_r, is_new_map = self._stats.update_exploration(tile, map_key)
+            was_new_map_ever = map_key not in self._stats.all_maps_visited
+            explore_r, is_new_map = self._stats.update_exploration(
+                tile, map_key, include_new_map_bonus=False
+            )
 
             # [FIX v17-C] Cap diferenciado: interior esgota rápido, exterior é abundante
             cap = CFG.map_explore_cap_interior if is_interior else CFG.map_explore_cap_exterior
@@ -491,6 +506,10 @@ class PokemonEnv(gym.Env):
                 self._explore_reward_per_map[map_key] = already_earned + explore_r
 
             step_reward += self._rewards.add("explore", explore_r)
+
+            if was_new_map_ever:
+                map_disc_bonus = CFG.new_map_bonus_route if map_bank == 3 else CFG.new_map_bonus
+                step_reward += self._rewards.add("map_disc", map_disc_bonus)
             
             if is_new_map:
                 # Reset y_min_episode to current y so we don't get a massive north bonus just by changing map
@@ -507,7 +526,6 @@ class PokemonEnv(gym.Env):
             is_new_map = False
 
         if is_new_map:
-            self._rewards.add("map_disc", CFG.new_map_bonus if map_bank != 4 else CFG.new_map_bonus_route)
             log.info(f"[Env {self.env_id}] New map: bank={map_key[0]} id={map_key[1]}")
 
         stuck_pen = self._stats.update_stuck(in_battle=_in_battle_now, script_lock=_script_lock)
@@ -632,6 +650,7 @@ class PokemonEnv(gym.Env):
                 "total_tiles_ever":           len(self._stats.persistent_tile_visits),
                 "total_maps_ever":            len(self._stats.all_maps_visited),
                 "best_milestone":             self._progress._best_flags_ever,
+                "frontier_ratio":             self._progress.stats_dict()["progress/frontier_ratio"],
                 "farm_detected":              int(self._stats.farm_detected),
                 "farm_detections":            self._stats.farm_detections,
             }
