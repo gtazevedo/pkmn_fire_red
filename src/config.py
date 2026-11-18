@@ -30,7 +30,7 @@ class Config:
     whiteout_frame_dir:  str = f"{base_save_dir}/whiteout_frames/"
 
     # [FIX v26b] config_stamp bumped — Fix do bypass hardcoded de +0.5 no advisor.py
-    config_stamp:        str = "v26b_dialog_bypass_fix"
+    config_stamp:        str = "v29_gen6_holy_grail"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
@@ -45,7 +45,7 @@ class Config:
     gae_lambda:      float = 0.95
     # [FIX v15] ent_coef 0.08→0.015: entropia muito alta (0.08) impedia
     # sequências de botões complexas (FIGHT→ataque). 0.015 é mais equilibrado.
-    ent_coef:        float = 0.015
+    ent_coef:        float = 0.08
     lr_start:        float = 1e-4
     lr_end:          float = 1e-4
     lr_total_budget: int   = 50_000_000
@@ -74,12 +74,12 @@ class Config:
     # Como não perdemos mais tempo passivamente, o limite de passos cuida da inércia.
     # [FIX v18.4] Reativado levemente o time_penalty para causar inércia desconfortável e forçar movimento
     # [FIX v24] Zerado o time_penalty para devolver a curiosidade infantil ao agente
-    time_penalty:    float = 0.0
+    time_penalty:    float = -0.01
     # [FIX v26] Whiddy-Pure: explore_weight é a ÚNICA fonte primária de dopamina
     explore_weight:  float = 3.0
     # [FIX v27] Bônus extra por tile novo em mapas exteriores (bank=3, routes)
     # Torna o exterior ~50% mais lucrativo que o interior sem punir estar dentro.
-    explore_weight_outdoor_bonus: float = 1.5
+    explore_weight_outdoor_bonus: float = 5.0
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
     max_op_level_reward_scale: float = 0.2
@@ -89,8 +89,8 @@ class Config:
     stale_map_penalty:          float = 0.0
 
     # [FIX v26] Whiddy-Pure: zerado new_map_bonus (causava exploit de +60 grátis no spawn)
-    new_map_bonus:        float = 0.0
-    new_map_bonus_route:  float = 0.0
+    new_map_bonus:        float = 50.0
+    new_map_bonus_route:  float = 100.0
 
     # [FIX v15] battle_idle_penalty: -0.05 → -0.01, grace: 120 → 200
     # Punições muito altas geravam fobia de batalhas e colapso na grama.
@@ -102,8 +102,8 @@ class Config:
     damage_weight:        float = 0.05  # fallback
 
     # [FIX v18.2] victory_bonus reduzido para 25.0 para nerfar farm de matinho
-    victory_bonus:        float = 25.0
-    near_ko_bonus:        float = 5.0
+    victory_bonus:        float = 40.0
+    near_ko_bonus:        float = 20.0
     post_battle_grace:    int   = 200
 
     # [FIX v11-F / v14-B] entry_bonus reduzido para valor simbólico.
@@ -121,8 +121,8 @@ class Config:
     # [FIX v11-D] battle_a_cap 20→50, battle_a_bonus 0.05→0.03
     # Cap de 20 bloqueava recompensa no meio da batalha. Aumentado para cobrir
     # navegação completa: FIGHT→move→confirmar→esperar = ~10-15 A presses.
-    battle_a_bonus:       float = 0.03
-    battle_a_cap:         int   = 50
+    battle_a_bonus:       float = 0.1
+    battle_a_cap:         int   = 100
 
     # [FIX v11-B] B penalty só depois de battle_b_threshold A presses
     # PWhiddy philosophy: zero punishments for menus/navigation
@@ -156,19 +156,19 @@ class Config:
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
     whiteout_entry_cooldown:   int   = 500
-    levelup_weight:       float = 40.0
+    levelup_weight:       float = 200.0
     badge_weight:         float = 50.0
     milestone_weight:     float = 10.0
     stuck_threshold:      int   = 150
-    stuck_penalty:        float = 0.0
+    stuck_penalty:        float = -0.08
 
     # [FIX v26] Whiddy-Pure: zerado north_bonus (redundante com explore_weight=3.0)
-    north_bonus_per_tile: float = 0.0
+    north_bonus_per_tile: float = 2.0
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
     # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
-    map_explore_cap_interior: float = 10.0   # bank=4 (quartos, casas) — esgota rápido
-    map_explore_cap_exterior: float = 300.0  # bank!=4 exterior expandido para mais exploração
+    map_explore_cap_interior: float = 50.0   # bank=4 (quartos, casas) — esgota rápido
+    map_explore_cap_exterior: float = 5000.0  # bank!=4 exterior expandido para mais exploração
 
     outdoor_sustain_bonus: float = 0.0
 

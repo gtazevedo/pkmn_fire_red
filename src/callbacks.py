@@ -450,6 +450,10 @@ class Trainer:
 
         try:
             while True:
+                if self._model.num_timesteps >= CFG.lr_total_budget:
+                    log.info(f"Treinamento finalizado: limite de {CFG.lr_total_budget} passos atingido.")
+                    break
+                    
                 learn_iter += 1
                 iter_start  = time.time()
 

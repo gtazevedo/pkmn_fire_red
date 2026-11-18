@@ -54,6 +54,25 @@ class RamReader:
         return total_flags
 
     @classmethod
+    def get_key_items(cls, ram_array) -> list[int]:
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        if wram_offset == 0: return []
+        key_items_start = wram_offset + 0x03B8
+        if len(ram_array) <= key_items_start + (30 * 4): return []
+        found_items = []
+        for i in range(30):
+            idx = key_items_start + i * 4
+            item_id = int(ram_array[idx]) | (int(ram_array[idx+1]) << 8)
+            item_qty = int(ram_array[idx+2]) | (int(ram_array[idx+3]) << 8)
+            if item_id != 0 and item_qty > 0:
+                found_items.append(item_id)
+        return found_items
+
+    @classmethod
+    def has_oaks_parcel(cls, ram_array) -> bool:
+        return 349 in cls.get_key_items(ram_array)
+
+    @classmethod
     def get_potions_count(cls, ram_array) -> int:
         wram_offset = cls.get_saveblock1_ptr(ram_array)
         if wram_offset == 0: return 0
