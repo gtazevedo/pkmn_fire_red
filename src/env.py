@@ -373,7 +373,8 @@ class PokemonEnv(gym.Env):
         
         # [USER REQUEST] Salvar print da tela quando iniciar a batalha
         if _in_battle_now and not getattr(self._stats, 'was_in_battle', False):
-            artifact_dir = "/mnt/c/Users/guilh/.gemini/antigravity/brain/7277d84d-02ea-4c17-85c5-47df9833bc22"
+            artifact_dir = "/mnt/c/Users/guilh/.gemini/antigravity/brain/dc565810-e46b-4a70-8005-69b3883d03bc"
+            os.makedirs(artifact_dir, exist_ok=True)
             img_path = os.path.join(artifact_dir, f"battle_start_env{self.env_id}.png")
             # raw_frame is RGB, cv2 expects BGR
             cv2.imwrite(img_path, cv2.cvtColor(raw_frame, cv2.COLOR_RGB2BGR))

@@ -18,6 +18,36 @@ from src.reader import RamReader
 PRIORITIES: tuple[str, ...] = ("explore", "heal", "battle_gym", "use_hm")
 NAV_HINTS: tuple[str, ...] = ("none", "north", "south", "east", "west", "interact")
 
+# Mapa macro de progressão em Kanto (pokefirered map_bank, map_id) ->
+# (sub_goal, target_map_bank, target_map_id, priority, navigation_hint)
+KANTO_PROGRESSION_GRAPH: dict[tuple[int, int], tuple[str, int, int, str, str]] = {
+    (3, 1):  ("Advance north from Viridian City to Route 2", 3, 20, "explore", "north"),
+    (3, 20): ("Enter Viridian Forest north via Route 2", 1, 0, "explore", "north"),
+    (1, 0):  ("Navigate Viridian Forest north toward Pewter City", 3, 2, "explore", "north"),
+    (3, 2):  ("Challenge Pewter Gym or continue east on Route 3", 3, 21, "battle_gym", "east"),
+    (3, 21): ("Cross Route 3 east toward Mt. Moon", 1, 1, "explore", "east"),
+    (1, 1):  ("Traverse Mt. Moon exit east to Route 4", 3, 22, "explore", "east"),
+    (3, 22): ("Head east on Route 4 into Cerulean City", 3, 3, "explore", "east"),
+    (3, 3):  ("Explore Cerulean City, Nugget Bridge, and Misty Gym", 3, 42, "battle_gym", "north"),
+    (3, 42): ("Cross Nugget Bridge north toward Route 25", 3, 43, "explore", "east"),
+    (3, 43): ("Visit Bill's Sea Cottage and return south to Cerulean", 3, 3, "explore", "south"),
+    (3, 23): ("Head south on Route 5 toward Vermilion City", 3, 24, "explore", "south"),
+    (3, 24): ("Head south on Route 6 into Vermilion City", 3, 5, "explore", "south"),
+    (3, 5):  ("Obtain HM01 Cut on S.S. Anne and challenge Lt. Surge", 3, 27, "use_hm", "north"),
+    (3, 27): ("Cross Route 9 east toward Rock Tunnel", 3, 28, "explore", "east"),
+    (3, 28): ("Enter Rock Tunnel south toward Lavender Town", 3, 4, "explore", "south"),
+    (3, 4):  ("Head west from Lavender Town onto Route 8", 3, 26, "explore", "west"),
+    (3, 26): ("Take Underground Path west toward Celadon City", 3, 6, "explore", "west"),
+    (3, 25): ("Enter Celadon City west from Route 7", 3, 6, "explore", "west"),
+    (3, 6):  ("Challenge Erika and clear Silph/Rocket path to Saffron", 3, 10, "battle_gym", "east"),
+    (3, 10): ("Challenge Sabrina at Saffron Gym and head south", 3, 7, "battle_gym", "south"),
+    (3, 7):  ("Obtain HM03 Surf in Safari Zone and challenge Koga", 3, 8, "use_hm", "south"),
+    (3, 8):  ("Challenge Blaine on Cinnabar Island and head north", 3, 1, "battle_gym", "north"),
+    (3, 40): ("Take Route 22 west toward Victory Road gate", 3, 41, "explore", "west"),
+    (3, 41): ("Pass badge checks north on Route 23 to Indigo Plateau", 3, 9, "explore", "north"),
+    (3, 9):  ("Challenge the Elite Four at Indigo Plateau", 3, 9, "battle_gym", "north"),
+}
+
 
 @dataclass
 class StrategicGoal:
@@ -289,6 +319,16 @@ class Strategist:
                 target_map_id=1,
                 priority="explore",
                 navigation_hint="north",
+            )
+
+        if (bank, mid) in KANTO_PROGRESSION_GRAPH:
+            sub_goal, t_bank, t_id, prio, hint = KANTO_PROGRESSION_GRAPH[(bank, mid)]
+            return StrategicGoal(
+                sub_goal=sub_goal,
+                target_map_bank=t_bank,
+                target_map_id=t_id,
+                priority=prio,
+                navigation_hint=hint,
             )
 
         return StrategicGoal(
