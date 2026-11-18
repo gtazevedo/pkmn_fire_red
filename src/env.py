@@ -344,9 +344,15 @@ class PokemonEnv(gym.Env):
         ram_array = self.env.get_ram()
         RamReader.enrich_info_from_ram(info, ram_array)
         cv_state = self._vision.detect_state(raw_frame)
-        _not_in_overworld = (info.get("gMain_callback2", 0) != 134571445)
-        _in_battle_now = RamReader.is_in_battle(info) or ((cv_state == GameState.BATTLE) and _not_in_overworld)
+        _cb2 = int(info.get("gMain_callback2", 0) or 0)
+        _not_in_overworld = (_cb2 != 134571445)
         _is_whiteout   = (cv_state == GameState.WHITEOUT)
+        _was_in_battle = getattr(self._stats, "was_in_battle", False)
+        _in_battle_now = (
+            RamReader.is_in_battle(info)
+            or ((cv_state == GameState.BATTLE) and _not_in_overworld)
+            or (_was_in_battle and _not_in_overworld and not _is_whiteout and _cb2 != 0)
+        )
         _script_lock   = bool(info.get('script_lock', 0)) or (cv_state == GameState.DIALOGUE)
 
         # [FIX v22 / v30b] Tactical Macro Execution com anti-farming real
@@ -569,7 +575,7 @@ class PokemonEnv(gym.Env):
             log.debug(f"[Env {self.env_id}] Battle entered! +{actual_entry:.1f} entry bonus")
 
         # [FIX v14-B] First Strike Reward
-        if _in_battle_now and self._stats.battle_damage_total > 0 and not getattr(self._stats, 'first_strike_paid', False):
+        if _in_battle_now and self._stats.current_battle_damage > 0 and not getattr(self._stats, 'first_strike_paid', False):
             self._stats.first_strike_paid = True
             fatigue = 0.5 ** max(0, self._stats.battles_fought - 1)
             actual_first_strike = CFG.first_strike_bonus * fatigue

@@ -124,3 +124,37 @@ def test_explore_rewards_per_map_resets_between_episodes():
     rew, is_new = stats.update_exploration((4, 0, 99, 99), map_key, include_new_map_bonus=False)
     assert is_new is True
     assert rew > 0.0
+
+
+def test_current_battle_damage_resets_per_battle():
+    stats = EpisodeStats()
+    stats.reset({"p1_lvl": 5, "p1_hp": 20, "p1_maxhp": 20})
+
+    # Batalha 1: entra com enemy_hp=20 e causa 7 de dano
+    stats.update_battle(True, enemy_hp=20, party_hp=20, script_lock=False,
+                        last_raw_frame=None, env_id=0, episode_num=1,
+                        current_tile=(3, 19, 5, 5), party_level=5)
+    assert stats.current_battle_damage == 0
+    stats.update_battle(True, enemy_hp=13, party_hp=20, script_lock=False,
+                        last_raw_frame=None, env_id=0, episode_num=1,
+                        current_tile=(3, 19, 5, 5), party_level=5)
+    assert stats.current_battle_damage == 7
+    assert stats.battle_damage_total == 7
+
+    # Sai da batalha
+    stats.update_battle(False, enemy_hp=0, party_hp=20, script_lock=False,
+                        last_raw_frame=None, env_id=0, episode_num=1,
+                        current_tile=(3, 19, 5, 5), party_level=5)
+
+    # Batalha 2: current_battle_damage deve resetar para 0 enquanto battle_damage_total acumula
+    stats.update_battle(True, enemy_hp=18, party_hp=20, script_lock=False,
+                        last_raw_frame=None, env_id=0, episode_num=1,
+                        current_tile=(3, 19, 5, 5), party_level=5)
+    assert stats.current_battle_damage == 0
+    assert stats.battle_damage_total == 7
+
+    stats.update_battle(True, enemy_hp=10, party_hp=20, script_lock=False,
+                        last_raw_frame=None, env_id=0, episode_num=1,
+                        current_tile=(3, 19, 5, 5), party_level=5)
+    assert stats.current_battle_damage == 8
+    assert stats.battle_damage_total == 15

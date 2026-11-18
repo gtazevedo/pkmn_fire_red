@@ -259,6 +259,7 @@ class EpisodeStats:
     _farm_ratio_threshold: float = 0.55
     battle_steps_total:    int   = 0
     battle_damage_total:   int   = 0
+    current_battle_damage: int   = 0
     farm_detected:         bool  = False
     farm_detections:       int   = 0
 
@@ -321,6 +322,7 @@ class EpisodeStats:
         self.battle_outcome_potential    = 0.0
         self.battle_steps_total          = 0
         self.battle_damage_total         = 0
+        self.current_battle_damage       = 0
         self.farm_detected               = False
         self.farm_detections             = 0
         self.first_strike_paid           = False
@@ -458,6 +460,7 @@ class EpisodeStats:
             self.battle_total_a          = 0
             self.battle_outcome_potential = 0.0
             self.steps_in_battle_current  = 0
+            self.current_battle_damage    = 0
             is_new_battle = True
 
         if in_battle:
@@ -471,8 +474,9 @@ class EpisodeStats:
             dealt_damage = (enemy_hp < self.last_enemy_hp)
             if dealt_damage:
                 dmg = self.last_enemy_hp - enemy_hp
-                self.damage              += dmg
-                self.battle_damage_total += dmg
+                self.damage                += dmg
+                self.battle_damage_total   += dmg
+                self.current_battle_damage += dmg
 
                 if self.initial_enemy_hp > 0:
                     hp_pct_dealt = dmg / self.initial_enemy_hp
