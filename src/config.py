@@ -66,8 +66,8 @@ class Config:
 
     # --- strategist & advisor ---
     ollama_url:                  str   = "http://localhost:11434/api/generate"
-    ollama_model:                str   = "qwen2.5:7b"
-    ollama_timeout_sec:          float = 30.0
+    ollama_model:                str   = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+    ollama_timeout_sec:          float = 15.0
     strategist_stagnation_steps: int   = 500
     strategist_goal_bonus:       float = 30.0
     dialog_repeat_penalty:       float = -0.001

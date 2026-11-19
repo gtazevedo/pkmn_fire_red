@@ -103,6 +103,7 @@ class Strategist:
         self._last_map_key: Optional[tuple[int, int]] = None
         self._last_flags: int = 0
         self._last_in_battle: Optional[bool] = None
+        self._last_has_parcel: Optional[bool] = None
         self._steps_on_current_map: int = 0
         self._rewarded_targets: set[tuple[int, int]] = set()
 
@@ -176,17 +177,33 @@ class Strategist:
             "recent_dialogues": recent_dialogues,
         }
 
-    def build_prompt(self, context: dict) -> str:
+    def build_prompt(
+        self,
+        context: dict,
+        suggested_goal: Optional[StrategicGoal] = None,
+    ) -> str:
         dialog_snippet = context.get("last_dialogue") or "none"
         recent = " | ".join(context.get("recent_dialogues", [])[-3:]) or "none"
+        suggestion_line = (
+            f"Baseline suggestion: target=({suggested_goal.target_map_bank},{suggested_goal.target_map_id}) "
+            f"hint={suggested_goal.navigation_hint} ({suggested_goal.sub_goal})\n"
+            if suggested_goal is not None
+            else ""
+        )
         return (
             "You are the macro strategic planner for a Pokemon FireRed RL agent.\n"
-            f"State: map_bank={context['map_bank']}, map_id={context['map_id']}, "
+            "Kanto maps (map_bank,map_id): Pallet=(3,0), RedHouse=(4,0), OakLab=(4,3), "
+            "Route1=(3,19), Viridian=(3,1), ViridianMart=(5,3), ViridianCenter=(5,4), "
+            "Route2=(3,20), ViridianForest=(1,0), Pewter=(3,2), PewterGym=(6,2).\n"
+            "Quest rule: If !oaks_parcel and flags<126 and badges==0 in Viridian -> target (5,3) east; "
+            "if oaks_parcel -> return south to (4,3) to deliver parcel before going north to (3,20).\n"
+            f"State: map=({context['map_bank']},{context['map_id']}), "
             f"pos=({context['player_x']},{context['player_y']}), "
             f"party_lvl={context['party_level']}, hp_pct={context['party_hp_pct']}, "
             f"badges={context['badges']}, flags={context['event_flags']}, "
             f"oaks_parcel={context['has_oaks_parcel']}, potions={context['potions']}, "
             f"in_battle={context['in_battle']}, steps_on_map={context['steps_on_map']}.\n"
+            f"{suggestion_line}"
             f"RamAdvisor last_dialogue: \"{dialog_snippet}\"\n"
             f"RamAdvisor recent_dialogues: \"{recent}\"\n"
             "Return STRICT JSON ONLY with keys: "
@@ -408,8 +425,7 @@ class Strategist:
             "options": {
                 "temperature": 0.1,
                 "num_predict": 96,
-                "num_ctx": 512,
-                "num_gpu": 22,
+                "num_ctx": 1024,
             },
         }).encode("utf-8")
 
@@ -431,9 +447,26 @@ class Strategist:
         raw_response = body.get("response", "") if isinstance(body, dict) else ""
         return self.parse_llm_response(raw_response)
 
-    def _query_and_apply(self, prompt: str, issued_on_map: tuple[int, int]) -> Optional[StrategicGoal]:
+    def _query_and_apply(
+        self,
+        prompt: str,
+        issued_on_map: tuple[int, int],
+        fallback_goal: Optional[StrategicGoal] = None,
+        in_battle: bool = False,
+    ) -> Optional[StrategicGoal]:
         goal = self._call_ollama(prompt)
         if goal is not None:
+            if (
+                fallback_goal is not None
+                and not in_battle
+                and (goal.target_map_bank, goal.target_map_id) == issued_on_map
+                and (fallback_goal.target_map_bank, fallback_goal.target_map_id) != issued_on_map
+                and "deliver" not in goal.sub_goal.lower()
+            ):
+                goal.target_map_bank = fallback_goal.target_map_bank
+                goal.target_map_id = fallback_goal.target_map_id
+                if goal.navigation_hint == "none":
+                    goal.navigation_hint = fallback_goal.navigation_hint
             goal.issued_on_map = issued_on_map
             with self._lock:
                 self._current_goal = goal
@@ -478,7 +511,11 @@ class Strategist:
         else:
             self._steps_on_current_map += 1
 
-        if self.should_trigger(map_key, total_flags, in_battle):
+        has_parcel_now = RamReader.has_oaks_parcel(ram_array) if ram_array is not None else False
+        parcel_changed = (
+            self._last_has_parcel is not None and has_parcel_now != self._last_has_parcel
+        )
+        if self.should_trigger(map_key, total_flags, in_battle) or parcel_changed:
             context = self.build_context(info, ram_array, in_battle, total_flags)
             fallback = self._heuristic_goal(context)
             fallback.issued_on_map = map_key
@@ -486,21 +523,33 @@ class Strategist:
                 self._current_goal = fallback
 
             self.queries_count += 1
-            if self._steps_on_current_map >= CFG.strategist_stagnation_steps:
+            stagnation_triggered = self._steps_on_current_map >= CFG.strategist_stagnation_steps
+            if stagnation_triggered:
                 self._steps_on_current_map = 0
 
-            prompt = self.build_prompt(context)
-            if self.async_mode and self._executor is not None:
-                if self._pending_future is None or self._pending_future.done():
-                    self._pending_future = self._executor.submit(
-                        self._query_and_apply, prompt, map_key
+            battle_only_trigger = (
+                (self._last_in_battle is not None and in_battle != self._last_in_battle)
+                and (self._last_map_key == map_key)
+                and (total_flags <= self._last_flags)
+                and not parcel_changed
+                and not stagnation_triggered
+            )
+            if not battle_only_trigger:
+                prompt = self.build_prompt(context, suggested_goal=fallback)
+                if self.async_mode and self._executor is not None:
+                    if self._pending_future is None or self._pending_future.done():
+                        self._pending_future = self._executor.submit(
+                            self._query_and_apply, prompt, map_key, fallback, in_battle
+                        )
+                else:
+                    self._query_and_apply(
+                        prompt, map_key, fallback_goal=fallback, in_battle=in_battle
                     )
-            else:
-                self._query_and_apply(prompt, map_key)
 
         self._last_map_key = map_key
         self._last_flags = total_flags
         self._last_in_battle = in_battle
+        self._last_has_parcel = has_parcel_now
         return alignment_bonus
 
     def get_goal_embedding(self) -> np.ndarray:
@@ -511,6 +560,7 @@ class Strategist:
         self._last_map_key = None
         self._last_flags = RamReader.event_flags_sum(ram_array) if ram_array is not None else 0
         self._last_in_battle = None
+        self._last_has_parcel = RamReader.has_oaks_parcel(ram_array) if ram_array is not None else None
         self._steps_on_current_map = 0
         self._rewarded_targets.clear()
         self.queries_count = 0
