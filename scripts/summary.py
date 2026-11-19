@@ -1,4 +1,12 @@
+from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
+
+from src.mlflow_utils import (
+    EXPERIMENT_TRAIN,
+    EXPERIMENT_TUNING,
+    MLFLOW_TRACKING_URI,
+    REGISTERED_MODEL_NAME,
+)
 
 
 def print_experiment_summary(client: MlflowClient, exp_name: str, limit: int = 15) -> None:
@@ -29,10 +37,35 @@ def print_experiment_summary(client: MlflowClient, exp_name: str, limit: int = 1
         )
 
 
+def print_registry_summary(client: MlflowClient, model_name: str = REGISTERED_MODEL_NAME) -> None:
+    print(f"\n=== MLflow Model Registry: {model_name} ===")
+    try:
+        rm = client.get_registered_model(model_name)
+    except MlflowException:
+        print(f"Registered model '{model_name}' not found.")
+        return
+
+    alias_str = ", ".join(f"@{k}=v{v}" for k, v in sorted(rm.aliases.items())) or "none"
+    print(f"Aliases: {alias_str}")
+    versions = sorted(
+        client.search_model_versions(f"name='{model_name}'"),
+        key=lambda item: int(item.version),
+    )
+    for mv in versions:
+        t = mv.tags or {}
+        print(
+            f"  v{mv.version} (run={mv.run_id[:8]}) | steps={t.get('timesteps', '-')} | "
+            f"rew20={t.get('reward_mean20', '-')} | score={t.get('score', '-')} | "
+            f"commit={t.get('git_commit', '-')} | ollama={t.get('ollama_model', '-')} | "
+            f"{mv.description or ''}"
+        )
+
+
 def main() -> None:
-    client = MlflowClient("sqlite:///mlflow.db")
-    for exp_name in ("Pokemon_RL_FireRed", "Pokemon_RL_Tuning"):
+    client = MlflowClient(MLFLOW_TRACKING_URI)
+    for exp_name in (EXPERIMENT_TRAIN, EXPERIMENT_TUNING):
         print_experiment_summary(client, exp_name)
+    print_registry_summary(client)
 
 
 if __name__ == "__main__":

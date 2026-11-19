@@ -13,11 +13,36 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.callbacks import PokemonCallback
 from src.config import CFG, GOAL_SIZE, GRID_SIZE, RAM_SIZE, log
 from src.env import PokemonEnv
+from src.mlflow_utils import (
+    EXPERIMENT_TRAIN,
+    MLFLOW_TRACKING_URI,
+    TRAIN_EXPERIMENT_DESCRIPTION,
+    build_run_name,
+    ensure_experiment_metadata,
+    standard_run_tags,
+)
 
 
-def evaluate(num_episodes: int = 3, max_eval_steps: int = 250) -> dict:
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    mlflow.set_experiment("Pokemon_RL_FireRed")
+def evaluate(
+    num_episodes: int = 3,
+    max_eval_steps: int = 250,
+    tracking_uri: str = MLFLOW_TRACKING_URI,
+) -> dict:
+    mlflow.set_tracking_uri(tracking_uri)
+    client = MlflowClient(tracking_uri)
+    ensure_experiment_metadata(
+        client,
+        EXPERIMENT_TRAIN,
+        TRAIN_EXPERIMENT_DESCRIPTION,
+        {
+            "game": "Pokemon-FireRed-GBA",
+            "architecture": "RecurrentPPO-LSTM+HRL",
+            "llm_planner": f"Ollama-{CFG.ollama_model.replace(':', '-')}",
+            "curriculum": "FrontierBias-50-30-20",
+            "repo": "pkmn_fire_red",
+        },
+    )
+    mlflow.set_experiment(EXPERIMENT_TRAIN)
 
     venv = DummyVecEnv([lambda: PokemonEnv(env_id=99)])
     vecnorm_path = CFG.model_path + "_vecnorm.pkl"
@@ -125,7 +150,7 @@ def evaluate(num_episodes: int = 3, max_eval_steps: int = 250) -> dict:
     finally:
         venv.close()
 
-    with mlflow.start_run(run_name=f"{CFG.config_stamp}_eval"):
+    with mlflow.start_run(run_name=build_run_name(suffix="eval")):
         params = {
             k: getattr(CFG, k)
             for k in dir(CFG)
@@ -135,16 +160,13 @@ def evaluate(num_episodes: int = 3, max_eval_steps: int = 250) -> dict:
         params["GRID_SIZE"] = GRID_SIZE
         params["GOAL_SIZE"] = GOAL_SIZE
         mlflow.log_params(params)
-        mlflow.set_tags({
-            "stage": "evaluation",
-            "surgery_verified": "true",
-            "ollama_model": CFG.ollama_model,
-            "sampling_strategy": "frontier_bias_50_30_20",
-        })
+        tags = standard_run_tags("eval")
+        tags["stage"] = "evaluation"
+        tags["surgery_verified"] = "true"
+        mlflow.set_tags(tags)
         mlflow.log_metrics(summary, step=int(model.num_timesteps))
 
-    client = MlflowClient("sqlite:///mlflow.db")
-    exp = client.get_experiment_by_name("Pokemon_RL_FireRed")
+    exp = client.get_experiment_by_name(EXPERIMENT_TRAIN)
     prev_runs = client.search_runs(
         exp.experiment_id,
         filter_string="tags.mlflow.runName = 'v29_gen6_holy_grail'",

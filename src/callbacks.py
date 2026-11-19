@@ -25,8 +25,11 @@ class MLflowOutputFormat(KVWriter):
     def close(self):
         pass
 
+from mlflow.tracking import MlflowClient
+
 from src.config import CFG, log, RAM_SIZE, FRAMES_PER_STEP
 from src.env import PokemonEnv
+from src.mlflow_utils import register_checkpoint_version, resolve_git_short
 from src.progress import ProgressManager
 from src.surgery import upgrade_checkpoint_if_needed
 
@@ -366,8 +369,8 @@ class Trainer:
             save_path   = CFG.checkpoint_dir,
             name_prefix = "pokemon_lstm",
         )
-        pokemon_cb = PokemonCallback(total_steps_ref=self._total_steps_ref)
-        return CallbackList([pokemon_cb, checkpoint_cb])
+        self._pokemon_cb = PokemonCallback(total_steps_ref=self._total_steps_ref)
+        return CallbackList([self._pokemon_cb, checkpoint_cb])
 
     def _load_or_create_model(self) -> RecurrentPPO:
         lr_schedule = make_lr_schedule()
@@ -448,6 +451,60 @@ class Trainer:
         )
         return model
 
+    def _register_mlflow_checkpoint(self, timesteps: int) -> None:
+        active_run = mlflow.active_run()
+        if active_run is None:
+            return
+        try:
+            rewards = list(self._pokemon_cb._hist["reward"]) if hasattr(self, "_pokemon_cb") else []
+            reward_mean20 = float(np.mean(rewards)) if len(rewards) >= 5 else None
+            score = None
+            try:
+                ntv = self._model.logger.name_to_value
+                if "progress/score" in ntv:
+                    score = float(ntv["progress/score"])
+            except Exception:
+                score = None
+
+            tags = {
+                "timesteps": str(int(timesteps)),
+                "config_stamp": CFG.config_stamp,
+                "git_commit": resolve_git_short(),
+                "ollama_model": CFG.ollama_model,
+            }
+            if score is not None:
+                tags["score"] = f"{score:.1f}"
+
+            desc = f"Checkpoint {CFG.config_stamp} at {timesteps:,} steps (ollama={CFG.ollama_model})"
+            client = MlflowClient(mlflow.get_tracking_uri())
+            register_checkpoint_version(
+                client=client,
+                run_id=active_run.info.run_id,
+                description=desc,
+                tags=tags,
+                aliases=("current",),
+                promote_champion_metric=reward_mean20,
+            )
+        except Exception as e:
+            log.error(f"Failed to register checkpoint in MLflow Registry: {e}")
+
+    def _save_and_log_artifacts(self, register_version: bool) -> None:
+        self._model.save(CFG.model_path)
+        self._env.save(CFG.model_path + "_vecnorm.pkl")
+        self._total_steps_ref[0] = self._model.num_timesteps
+        stamp_file = CFG.model_path + ".stamp"
+        with open(stamp_file, "w") as f:
+            f.write(CFG.config_stamp)
+
+        try:
+            mlflow.log_artifact(CFG.model_path + ".zip")
+            mlflow.log_artifact(CFG.model_path + "_vecnorm.pkl")
+        except Exception as e:
+            log.error(f"Failed to log artifacts to MLflow: {e}")
+
+        if register_version:
+            self._register_mlflow_checkpoint(self._model.num_timesteps)
+
     def _current_phase(self) -> int:
         t = self._total_steps_ref[0]
         if t < CFG.phase1_steps:  return 1
@@ -481,19 +538,7 @@ class Trainer:
                     reset_num_timesteps=False,
                     callback=self._callbacks,
                 )
-                self._model.save(CFG.model_path)
-                self._env.save(CFG.model_path + "_vecnorm.pkl")
-
-                self._total_steps_ref[0] = self._model.num_timesteps
-                stamp_file = CFG.model_path + ".stamp"
-                with open(stamp_file, "w") as f:
-                    f.write(CFG.config_stamp)
-
-                try:
-                    mlflow.log_artifact(CFG.model_path + ".zip")
-                    mlflow.log_artifact(CFG.model_path + "_vecnorm.pkl")
-                except Exception as e:
-                    log.error(f"Failed to log artifacts to MLflow: {e}")
+                self._save_and_log_artifacts(register_version=(learn_iter % 5 == 0))
                     
                 # [USER REQUEST] Salva um print do ambiente a cada checkpoint para inspeção do Agente "Juiz"
                 try:
@@ -504,6 +549,8 @@ class Trainer:
                         os.makedirs(artifact_dir, exist_ok=True)
                         img_path = os.path.join(artifact_dir, "checkpoint_latest.png")
                         cv2.imwrite(img_path, cv2.cvtColor(frames[0], cv2.COLOR_RGB2BGR))
+                        if mlflow.active_run() is not None:
+                            mlflow.log_artifact(img_path, artifact_path="screenshots")
                 except Exception as e:
                     log.error(f"Failed to save checkpoint screenshot: {e}")
 
@@ -522,11 +569,7 @@ class Trainer:
 
         except KeyboardInterrupt:
             log.info("KeyboardInterrupt — saving model …")
-            self._model.save(CFG.model_path)
-            self._env.save(CFG.model_path + "_vecnorm.pkl")
-            stamp_file = CFG.model_path + ".stamp"
-            with open(stamp_file, "w") as f:
-                f.write(CFG.config_stamp)
+            self._save_and_log_artifacts(register_version=True)
             log.info("Done.")
 
         finally:
