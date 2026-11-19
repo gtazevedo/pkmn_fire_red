@@ -642,6 +642,7 @@ class PokemonEnv(gym.Env):
             episode_num=self._episode_num,
             current_tile=tile,
             party_level=RamReader.party_level(info),
+            has_parcel=has_parcel_now,
         )
         step_reward += self._rewards.add("damage", dmg_reward)
 
@@ -654,6 +655,9 @@ class PokemonEnv(gym.Env):
         if whiteout_pen != 0.0:
             step_reward += self._rewards.add("stuck", whiteout_pen)
             log.info(f"[Env {self.env_id}] WHITEOUT! Penalty {whiteout_pen:.1f}")
+            if CFG.terminate_on_whiteout:
+                terminated = True
+                log.info(f"[Env {self.env_id}] ☠ WHITEOUT → encerrando episódio imediatamente.")
 
         if is_new_battle:
             if tile in self._stats.whiteout_tile_cooldown and self._stats.whiteout_tile_cooldown[tile] > 0:
@@ -664,8 +668,26 @@ class PokemonEnv(gym.Env):
             step_reward += self._rewards.add("entry", actual_entry)
             log.debug(f"[Env {self.env_id}] Battle entered! +{actual_entry:.1f} entry bonus")
 
+            if map_bank == 3:
+                n_map_battles = self._stats.map_battles.get(map_key, 0)
+                grind_threshold = 2 if has_parcel_now else 3
+                if n_map_battles >= grind_threshold:
+                    step_reward += self._rewards.add("idle_pen", CFG.wild_grind_penalty)
+                    log.info(
+                        f"[Env {self.env_id}] 🌿 WILD GRIND PENALTY {CFG.wild_grind_penalty:.1f} "
+                        f"(map={map_key}, battles={n_map_battles}, parcel={has_parcel_now})"
+                    )
+                cur_hp = RamReader.party_hp(info)
+                max_hp = RamReader.party_max_hp(info)
+                if max_hp > 0 and (cur_hp / max_hp) < 0.35:
+                    step_reward += self._rewards.add("idle_pen", CFG.low_hp_battle_penalty)
+                    log.info(
+                        f"[Env {self.env_id}] 🩸 LOW-HP WILD BATTLE PENALTY {CFG.low_hp_battle_penalty:.1f} "
+                        f"(hp={cur_hp}/{max_hp})"
+                    )
+
         # [FIX v14-B] First Strike Reward (com fadiga por mapa)
-        battle_fatigue = self._stats.current_battle_fatigue() if _in_battle_now else 1.0
+        battle_fatigue = self._stats.current_battle_fatigue(has_parcel=has_parcel_now) if _in_battle_now else 1.0
         if _in_battle_now and self._stats.current_battle_damage > 0 and not getattr(self._stats, 'first_strike_paid', False):
             self._stats.first_strike_paid = True
             actual_first_strike = CFG.first_strike_bonus * battle_fatigue
@@ -694,6 +716,8 @@ class PokemonEnv(gym.Env):
                 RamReader.party_level(info),
                 self.env_id,
                 badges=RamReader.badges(info),
+                in_battle=_in_battle_now,
+                has_parcel=has_parcel_now,
             ),
         )
 

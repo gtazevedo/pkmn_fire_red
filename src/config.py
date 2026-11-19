@@ -134,19 +134,16 @@ class Config:
     battle_idle_grace:    int   = 200   # mais carência para lidar com menus e gary
 
     # [FIX v11-C] Novo sistema de reward de dano baseado em HP%
-    hp_pct_scale:         float = 15.0
+    hp_pct_scale:         float = 6.0
     damage_weight:        float = 0.05  # fallback
 
-    # [FIX v18.2] victory_bonus reduzido para 25.0 para nerfar farm de matinho
-    victory_bonus:        float = 40.0
-    near_ko_bonus:        float = 20.0
+    # Recompensas enxutas para impedir battle-junkie farming em rotas
+    victory_bonus:        float = 15.0
+    near_ko_bonus:        float = 5.0
     post_battle_grace:    int   = 200
 
-    # [FIX v11-F / v14-B] entry_bonus reduzido para valor simbólico.
-    # O lucro real de batalhar vem do first_strike_bonus (12.0) pago ao
-    # causar o primeiro dano. entry_bonus sinaliza "você entrou em batalha"
-    # sem ser o incentivo principal — isso elimina o ciclo de farming passivo.
-    entry_bonus:          float = 1.0
+    # Zero incentivo gratuito para simplesmente entrar em batalha
+    entry_bonus:          float = 0.0
 
     # [FIX v13-F] steps_in_battle para nova obs feature
     # Normalizado por steps_in_battle_norm_cap para ficar em [0, 1]
@@ -154,20 +151,21 @@ class Config:
 
     battle_sustain_bonus: float = 0.0
 
-    # [FIX v11-D] battle_a_cap 20→50, battle_a_bonus 0.05→0.03
-    # Cap de 20 bloqueava recompensa no meio da batalha. Aumentado para cobrir
-    # navegação completa: FIGHT→move→confirmar→esperar = ~10-15 A presses.
-    battle_a_bonus:       float = 0.02
-    battle_a_cap:         int   = 25
+    # Sem bônus passivo de spam de A durante batalha
+    battle_a_bonus:       float = 0.0
+    battle_a_cap:         int   = 0
 
     # [FIX v11-B] B penalty só depois de battle_b_threshold A presses
     # PWhiddy philosophy: zero punishments for menus/navigation
     battle_b_penalty:     float = 0.0
     battle_b_threshold:   int   = 999  # Disable b penalty
     
-    # Penalidade real de whiteout + fadiga por mapa anti-battle-junkie
-    whiteout_penalty:          float = -40.0
+    # Penalidade severa de whiteout + término imediato + taxas anti-grind selvagem
+    whiteout_penalty:          float = -80.0
     whiteout_idle_multiplier:  float = 0.0
+    terminate_on_whiteout:     bool  = True
+    wild_grind_penalty:        float = -15.0
+    low_hp_battle_penalty:     float = -15.0
 
     # [FIX v12-B / v13-A] Anti-farming: threshold RANDOMIZADO por episódio
     # v12 usava 0.60 fixo → agente calibrou farming em exatamente 0.60.
@@ -180,9 +178,8 @@ class Config:
     # Soft reset to prevent endless loops, but no harsh punishment
     farm_episode_penalty:     float = 0.0
 
-    # [FIX v18.2] First Strike Bonus: reduzido para 12.0 para nerfar farm de matinho
-    # O lucro real de batalhar vem do first_strike_bonus.
-    first_strike_bonus:       float = 12.0
+    # First Strike reduzido e sujeito à fadiga por mapa
+    first_strike_bonus:       float = 4.0
 
     # [FIX v19] Dynamic Battle Curriculum (rodinhas de bicicleta)
     # Bloqueia (NO-OP) direcionais, start e select nas batalhas até bater 10% de win rate.
@@ -192,7 +189,7 @@ class Config:
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
     whiteout_entry_cooldown:   int   = 500
-    levelup_weight:       float = 80.0
+    levelup_weight:       float = 30.0
     max_rewarded_level_base:      int   = 10
     max_rewarded_level_per_badge: int   = 8
     badge_weight:         float = 50.0

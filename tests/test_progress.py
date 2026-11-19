@@ -226,32 +226,50 @@ def test_parcel_milestones_and_cross_worker_disk_sync(tmp_path):
 
 def test_anti_battle_junkie_fatigue_whiteout_and_level_cap(tmp_path):
     stats = EpisodeStats()
-    stats.reset({"p1_lvl": 9, "p1_hp": 24, "p1_maxhp": 24})
+    stats.reset({"p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24})
 
-    # Batalhas 1..4 no mesmo mapa (3,19) devem decair 1.0 -> 0.5 -> 0.2 -> 0.0 em dano, near_ko e victory
+    # Rota exterior (3,19) sem Parcel: fadiga 1.0 -> 0.25 -> 0.0 -> 0.0 em dano, near_ko, victory e levelup
     observed = []
-    for _ in range(4):
-        stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 19, 5, 5), 9)
-        r_dmg, _, r_ko, _, _, _ = stats.update_battle(True, 1, 24, False, None, 0, 1, (3, 19, 5, 5), 9)
-        _, _, r_vic, _, _, _ = stats.update_battle(True, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 9)
-        stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 9)
+    for i in range(4):
+        stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
+        r_dmg, _, r_ko, _, _, _ = stats.update_battle(True, 1, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
+        _, _, r_vic, _, _, _ = stats.update_battle(True, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
+        stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
         observed.append((stats.current_battle_fatigue(), r_dmg, r_ko, r_vic))
 
-    assert [round(o[0], 2) for o in observed] == [1.0, 0.5, 0.2, 0.0]
+    assert [round(o[0], 2) for o in observed] == [1.0, 0.25, 0.0, 0.0]
+    assert observed[2][1:] == (0.0, 0.0, 0.0)
     assert observed[3][1:] == (0.0, 0.0, 0.0)
 
-    # Trocar para mapa novo (3,20) restaura fadiga 1.0
-    stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 20, 5, 5), 9)
-    assert stats.current_battle_fatigue() == 1.0
+    # Em batalha 3+ na rota exterior (fatigue=0.0), update_level(..., in_battle=True) paga 0.0
+    assert stats.update_level(8, env_id=0, badges=0, in_battle=True) == 0.0
 
-    # Whiteout aplica penalidade configurada (-40.0)
-    _, _, _, _, whiteout_pen, _ = stats.update_battle(True, 20, 0, False, None, 0, 1, (3, 20, 5, 5), 9)
-    assert whiteout_pen == CFG.whiteout_penalty == -40.0
+    # Com Oak's Parcel na rota exterior, fadiga eh 0.5 -> 0.0
+    stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
+    assert stats.current_battle_fatigue(has_parcel=True) == 0.5
+    stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
+    stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
+    assert stats.current_battle_fatigue(has_parcel=True) == 0.0
+    stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
 
-    # Teto de nivel por insignia: lvl 10 paga, lvl 11 sem insignia paga 0, com 1 insignia volta a pagar
-    assert stats.update_level(10, env_id=0, badges=0) == CFG.levelup_weight
-    assert stats.update_level(11, env_id=0, badges=0) == 0.0
-    assert stats.update_level(12, env_id=0, badges=1) == CFG.levelup_weight
+    # Em ginasio/interior (6,2), fadiga decai 1.0 -> 0.5 -> 0.25 -> 0.1 e nunca zera
+    gym_fatigue = []
+    for _ in range(4):
+        stats.update_battle(True, 20, 24, False, None, 0, 1, (6, 2, 5, 5), 8)
+        gym_fatigue.append(stats.current_battle_fatigue())
+        stats.update_battle(False, 0, 24, False, None, 0, 1, (6, 2, 5, 5), 8)
+    assert gym_fatigue == [1.0, 0.5, 0.25, 0.1]
+    assert stats.update_level(9, env_id=0, badges=0, in_battle=True) == round(CFG.levelup_weight * 0.1, 6)
+
+    # Whiteout aplica penalidade severa (-80.0) com terminate_on_whiteout=True
+    _, _, _, _, whiteout_pen, _ = stats.update_battle(True, 20, 0, False, None, 0, 1, (6, 2, 5, 5), 9)
+    assert whiteout_pen == CFG.whiteout_penalty == -80.0
+    assert CFG.terminate_on_whiteout is True
+
+    # Teto de nivel por insignia fora de batalha: lvl 10 paga, lvl 11 sem insignia paga 0, com 1 insignia volta a pagar
+    assert stats.update_level(10, env_id=0, badges=0, in_battle=False) == CFG.levelup_weight
+    assert stats.update_level(11, env_id=0, badges=0, in_battle=False) == 0.0
+    assert stats.update_level(12, env_id=0, badges=1, in_battle=False) == CFG.levelup_weight
 
     # Marco geografico com flags menores que o recorde global ainda salva e entra em frontier
     for fl in range(112, 124):
@@ -263,11 +281,5 @@ def test_anti_battle_junkie_fatigue_whiteout_and_level_cap(tmp_path):
     assert os.path.exists(parcel_116)
 
     rng = random.Random(99)
-    frontier_hits = 0
-    parcel_hits = 0
-    for _ in range(200):
-        picked = pm.sample_state(rng=rng)
-        if picked == parcel_116:
-            parcel_hits += 1
-        frontier_hits += 1
-    assert parcel_hits > 15 and frontier_hits == 200
+    parcel_hits = sum(1 for _ in range(200) if pm.sample_state(rng=rng) == parcel_116)
+    assert parcel_hits > 15

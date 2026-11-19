@@ -545,22 +545,34 @@ class EpisodeStats:
             return CFG.stuck_penalty
         return 0.0
 
-    def current_battle_fatigue(self) -> float:
+    def current_battle_fatigue(self, has_parcel: bool = False) -> float:
         n = self.map_battles.get(self.current_battle_map, self.battles_fought)
+        is_outdoor_route = bool(self.current_battle_map) and self.current_battle_map[0] == 3
+        if is_outdoor_route:
+            if has_parcel:
+                return 0.5 if n <= 1 else 0.0
+            if n <= 1:
+                return 1.0
+            if n == 2:
+                return 0.25
+            return 0.0
+
+        # Em ginásios, dungeons (bank=1) e batalhas de história (Lab bank=4), nunca zera
         if n <= 1:
             return 1.0
         if n == 2:
             return 0.5
         if n == 3:
-            return 0.2
-        return 0.0
+            return 0.25
+        return 0.1
 
     def update_battle(self, in_battle: bool, enemy_hp: int, party_hp: int,
                        script_lock: bool,
                        last_raw_frame: Optional[np.ndarray], env_id: int,
                        episode_num: int,
                        current_tile: tuple,
-                       party_level: int) -> tuple:
+                       party_level: int,
+                       has_parcel: bool = False) -> tuple:
         reward         = 0.0
         idle_pen       = 0.0
         vic_bonus      = 0.0
@@ -591,7 +603,7 @@ class EpisodeStats:
             self.current_battle_damage    = 0
             is_new_battle = True
 
-        fatigue = self.current_battle_fatigue()
+        fatigue = self.current_battle_fatigue(has_parcel=has_parcel)
 
         if in_battle:
             self.battle_steps_total      += 1
@@ -710,7 +722,14 @@ class EpisodeStats:
         self.was_in_battle = in_battle
         return reward, idle_pen, vic_bonus, is_new_battle, whiteout_pen, farm_terminate
 
-    def update_level(self, current_level: int, env_id: int, badges: int = 0) -> float:
+    def update_level(
+        self,
+        current_level: int,
+        env_id: int,
+        badges: int = 0,
+        in_battle: bool = False,
+        has_parcel: bool = False,
+    ) -> float:
         if current_level == 0:
             return 0.0
 
@@ -734,6 +753,8 @@ class EpisodeStats:
         level_cap = CFG.max_rewarded_level_base + max(0, int(badges)) * CFG.max_rewarded_level_per_badge
         rewarded_delta = max(0, min(current_level, level_cap) - self.max_level)
         reward = rewarded_delta * CFG.levelup_weight
+        if in_battle:
+            reward *= self.current_battle_fatigue(has_parcel=has_parcel)
         self.levels_gained += delta
         self.max_level      = current_level
         log.info(f"[Env {env_id}] Level up! +{delta} → total={current_level} (rew={reward:.1f}, cap={level_cap})")
