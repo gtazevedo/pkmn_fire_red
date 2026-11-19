@@ -274,7 +274,7 @@ def test_strategist_anti_echo_and_kanto_prompt_and_battle_skip(monkeypatch):
     assert len(calls) == 1
     assert "Pallet=(3,0)" in calls[0]
     assert "ViridianMart=(5,3)" in calls[0]
-    assert "Baseline suggestion: target=(5,3)" in calls[0]
+    assert "target_map_bank=5, target_map_id=3" in calls[0]
     # Eco preguiçoso (3,1) deve preservar alvo (5,3) e hint 'east' da heuristica
     assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (5, 3)
     assert strat.current_goal.navigation_hint == "east"
@@ -284,4 +284,53 @@ def test_strategist_anti_echo_and_kanto_prompt_and_battle_skip(monkeypatch):
     assert strat.queries_count == 2
     assert len(calls) == 1
     assert strat.current_goal.navigation_hint == "interact"
+    strat.close()
+
+
+def test_strategist_schema_and_3b_guardrails(monkeypatch):
+    captured = []
+
+    class FakeResp:
+        def __init__(self, payload: bytes):
+            self._buf = io.BytesIO(payload)
+
+        def read(self):
+            return self._buf.read()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured.append(json.loads(req.data.decode("utf-8")))
+        return FakeResp(
+            json.dumps(
+                {
+                    "response": json.dumps(
+                        {
+                            "sub_goal": "none",
+                            "target_map_bank": 0,
+                            "target_map_id": 5,
+                            "priority": "heal",
+                            "navigation_hint": "east",
+                        }
+                    )
+                }
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+    info_vir = {"map_bank": 3, "map_id": 1, "p1_lvl": 7, "p1_hp": 22, "p1_maxhp": 24}
+    strat.update(info_vir, ram_array=None, in_battle=False, total_flags=122)
+
+    assert len(captured) == 1
+    assert captured[0]["format"] == Strategist.OLLAMA_RESPONSE_SCHEMA
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (5, 3)
+    assert strat.current_goal.priority == "explore"
+    assert strat.current_goal.sub_goal != "none"
+    assert "Viridian Poke Mart" in strat.current_goal.sub_goal
     strat.close()

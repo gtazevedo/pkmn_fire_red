@@ -72,10 +72,28 @@ class StrategicGoal:
 
 class Strategist:
     """
-    Planejador estratégico assíncrono (Event-Driven) usando Ollama local com qwen2.5:7b.
+    Planejador estratégico assíncrono (Event-Driven) usando Ollama local com LLM.
     Integrado ao RamAdvisor para ler diálogos da EWRAM e definir sub-objetivos macro
     injetados na observação do PPO+LSTM sem nunca bloquear o loop env.step().
     """
+
+    OLLAMA_RESPONSE_SCHEMA: dict = {
+        "type": "object",
+        "properties": {
+            "sub_goal": {"type": "string"},
+            "target_map_bank": {"type": "integer"},
+            "target_map_id": {"type": "integer"},
+            "priority": {"type": "string", "enum": list(PRIORITIES)},
+            "navigation_hint": {"type": "string", "enum": list(NAV_HINTS)},
+        },
+        "required": [
+            "sub_goal",
+            "target_map_bank",
+            "target_map_id",
+            "priority",
+            "navigation_hint",
+        ],
+    }
 
     def __init__(
         self,
@@ -185,31 +203,32 @@ class Strategist:
         dialog_snippet = context.get("last_dialogue") or "none"
         recent = " | ".join(context.get("recent_dialogues", [])[-3:]) or "none"
         suggestion_line = (
-            f"Baseline suggestion: target=({suggested_goal.target_map_bank},{suggested_goal.target_map_id}) "
-            f"hint={suggested_goal.navigation_hint} ({suggested_goal.sub_goal})\n"
+            f"Baseline: sub_goal=\"{suggested_goal.sub_goal}\", "
+            f"target_map_bank={suggested_goal.target_map_bank}, "
+            f"target_map_id={suggested_goal.target_map_id}, "
+            f"priority=\"{suggested_goal.priority}\", "
+            f"navigation_hint=\"{suggested_goal.navigation_hint}\".\n"
             if suggested_goal is not None
             else ""
         )
         return (
-            "You are the macro strategic planner for a Pokemon FireRed RL agent.\n"
-            "Kanto maps (map_bank,map_id): Pallet=(3,0), RedHouse=(4,0), OakLab=(4,3), "
+            "You are a Pokemon FireRed strategic planner. Output one JSON object.\n"
+            "Rules:\n"
+            "- sub_goal must be a concise English action phrase (never \"none\").\n"
+            "- priority: \"heal\" ONLY if hp_pct < 0.35; \"battle_gym\" only for Gym/Elite4; \"use_hm\" for HM obstacles; else \"explore\".\n"
+            "- Keep target_map_bank and target_map_id aligned with Kanto maps or the baseline unless low HP or dialogue requires overriding.\n"
+            "- Kanto maps (bank,id): Pallet=(3,0), RedHouse=(4,0), OakLab=(4,3), "
             "Route1=(3,19), Viridian=(3,1), ViridianMart=(5,3), ViridianCenter=(5,4), "
             "Route2=(3,20), ViridianForest=(1,0), Pewter=(3,2), PewterGym=(6,2).\n"
-            "Quest rule: If !oaks_parcel and flags<126 and badges==0 in Viridian -> target (5,3) east; "
-            "if oaks_parcel -> return south to (4,3) to deliver parcel before going north to (3,20).\n"
-            f"State: map=({context['map_bank']},{context['map_id']}), "
+            f"State: map_bank={context['map_bank']}, map_id={context['map_id']}, "
             f"pos=({context['player_x']},{context['player_y']}), "
             f"party_lvl={context['party_level']}, hp_pct={context['party_hp_pct']}, "
             f"badges={context['badges']}, flags={context['event_flags']}, "
-            f"oaks_parcel={context['has_oaks_parcel']}, potions={context['potions']}, "
+            f"has_oaks_parcel={context['has_oaks_parcel']}, potions={context['potions']}, "
             f"in_battle={context['in_battle']}, steps_on_map={context['steps_on_map']}.\n"
             f"{suggestion_line}"
-            f"RamAdvisor last_dialogue: \"{dialog_snippet}\"\n"
-            f"RamAdvisor recent_dialogues: \"{recent}\"\n"
-            "Return STRICT JSON ONLY with keys: "
-            "{\"sub_goal\": str, \"target_map_bank\": int, \"target_map_id\": int, "
-            "\"priority\": \"explore\"|\"heal\"|\"battle_gym\"|\"use_hm\", "
-            "\"navigation_hint\": \"none\"|\"north\"|\"south\"|\"east\"|\"west\"|\"interact\"}."
+            f"RamAdvisor last_dialogue: \"{dialog_snippet}\" | recent: \"{recent}\"\n"
+            "Return strict JSON matching the schema."
         )
 
     @classmethod
@@ -277,10 +296,13 @@ class Strategist:
             )
 
         if party_hp > 0 and hp_pct < 0.30:
+            heal_bank, heal_id = (
+                (4, 0) if (bank == 4 or (bank == 3 and mid in (0, 19))) else (5, 4)
+            )
             return StrategicGoal(
                 sub_goal="Heal injured party at Pokemon Center",
-                target_map_bank=4,
-                target_map_id=1,
+                target_map_bank=heal_bank,
+                target_map_id=heal_id,
                 priority="heal",
                 navigation_hint="interact",
             )
@@ -419,7 +441,7 @@ class Strategist:
         payload = json.dumps({
             "model": self.model_name,
             "prompt": prompt,
-            "format": "json",
+            "format": self.OLLAMA_RESPONSE_SCHEMA,
             "stream": False,
             "keep_alive": "24h",
             "options": {
@@ -453,20 +475,28 @@ class Strategist:
         issued_on_map: tuple[int, int],
         fallback_goal: Optional[StrategicGoal] = None,
         in_battle: bool = False,
+        hp_pct: float = 1.0,
     ) -> Optional[StrategicGoal]:
         goal = self._call_ollama(prompt)
         if goal is not None:
-            if (
-                fallback_goal is not None
-                and not in_battle
-                and (goal.target_map_bank, goal.target_map_id) == issued_on_map
-                and (fallback_goal.target_map_bank, fallback_goal.target_map_id) != issued_on_map
-                and "deliver" not in goal.sub_goal.lower()
-            ):
-                goal.target_map_bank = fallback_goal.target_map_bank
-                goal.target_map_id = fallback_goal.target_map_id
-                if goal.navigation_hint == "none":
-                    goal.navigation_hint = fallback_goal.navigation_hint
+            if fallback_goal is not None:
+                if goal.target_map_bank <= 0 and fallback_goal.target_map_bank > 0:
+                    goal.target_map_bank = fallback_goal.target_map_bank
+                    goal.target_map_id = fallback_goal.target_map_id
+                if (
+                    not in_battle
+                    and (goal.target_map_bank, goal.target_map_id) == issued_on_map
+                    and (fallback_goal.target_map_bank, fallback_goal.target_map_id) != issued_on_map
+                    and "deliver" not in goal.sub_goal.lower()
+                ):
+                    goal.target_map_bank = fallback_goal.target_map_bank
+                    goal.target_map_id = fallback_goal.target_map_id
+                    if goal.navigation_hint == "none":
+                        goal.navigation_hint = fallback_goal.navigation_hint
+                if goal.priority == "heal" and hp_pct >= 0.45 and fallback_goal.priority != "heal":
+                    goal.priority = fallback_goal.priority
+                if goal.sub_goal.strip().lower() in ("", "none", "explore", "heal", "battle_gym", "use_hm"):
+                    goal.sub_goal = fallback_goal.sub_goal
             goal.issued_on_map = issued_on_map
             with self._lock:
                 self._current_goal = goal
@@ -536,14 +566,19 @@ class Strategist:
             )
             if not battle_only_trigger:
                 prompt = self.build_prompt(context, suggested_goal=fallback)
+                hp_pct = float(context.get("party_hp_pct", 1.0))
                 if self.async_mode and self._executor is not None:
                     if self._pending_future is None or self._pending_future.done():
                         self._pending_future = self._executor.submit(
-                            self._query_and_apply, prompt, map_key, fallback, in_battle
+                            self._query_and_apply, prompt, map_key, fallback, in_battle, hp_pct
                         )
                 else:
                     self._query_and_apply(
-                        prompt, map_key, fallback_goal=fallback, in_battle=in_battle
+                        prompt,
+                        map_key,
+                        fallback_goal=fallback,
+                        in_battle=in_battle,
+                        hp_pct=hp_pct,
                     )
 
         self._last_map_key = map_key
