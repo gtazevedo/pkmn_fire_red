@@ -320,3 +320,38 @@ def test_genesis_anchor_prevents_start_dilution_at_scale(tmp_path):
     assert stats["progress/start_state_samples"] == start_hits
     assert abs(stats["progress/genesis_ratio"] - (genesis_hits / n_samples)) < 1e-6
     assert abs(stats["progress/start_state_ratio"] - (start_hits / n_samples)) < 1e-6
+
+
+def test_post_pokedex_events_124_outranks_pre_delivery_and_saves_route2(tmp_path):
+    for fl in [112, 113, 114, 116, 117, 118, 120, 121, 122, 123, 124]:
+        (tmp_path / f"events_{fl:03d}.state").write_bytes(b"STATE")
+    for pre in [
+        "events_120_m01_3_19.state",
+        "events_121_m05_5_3.state",
+        "events_121_m09_4_3.state",
+    ]:
+        (tmp_path / pre).write_bytes(b"PRE")
+
+    start_path = str(tmp_path / "Start.state.gz")
+    pallet_path = str(tmp_path / "pallet_exterior.state")
+    (tmp_path / "Start.state.gz").write_bytes(b"START")
+    (tmp_path / "pallet_exterior.state").write_bytes(b"PALLET")
+
+    pm = ProgressManager(progress_dir=str(tmp_path), state_file=start_path)
+    pm._saved_states.append(pallet_path)
+
+    ordered = sorted(pm._saved_states, key=pm._progression_key)
+    assert ordered[0] == start_path
+    assert ordered[1] == pallet_path
+    s124 = str(tmp_path / "events_124.state")
+    s121_m09 = str(tmp_path / "events_121_m09_4_3.state")
+    assert ordered.index(s124) > ordered.index(s121_m09)
+
+    fake_emu = SimpleNamespace(em=SimpleNamespace(get_state=lambda: b"ROUTE2_POKEDEX"))
+    pm.check_and_save_map_milestone(fake_emu, 124, (3, 20), env_id=0, has_pokedex=True)
+    r2_file = str(tmp_path / "events_124_m13_3_20.state")
+    assert os.path.exists(r2_file)
+
+    ordered2 = sorted(pm._saved_states, key=pm._progression_key)
+    assert ordered2[-1] == r2_file
+    assert ordered2[0] == start_path and ordered2[1] == pallet_path

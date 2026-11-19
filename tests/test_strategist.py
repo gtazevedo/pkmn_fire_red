@@ -412,3 +412,37 @@ def test_strategist_early_game_bedroom_house_and_starter_goals():
     assert (g_lab_with_starter.target_map_bank, g_lab_with_starter.target_map_id) == (3, 0)
     assert g_lab_with_starter.navigation_hint == "south"
     strat.close()
+
+
+def test_strategist_viridian_routes_north_after_pokedex():
+    import struct
+
+    ram = np.zeros(262144 + 0x6000, dtype=np.uint8)
+    sb1 = 0x025000
+    struct.pack_into("<I", ram, 262144 + 0x5008, 0x02000000 | sb1)
+    # Marca FLAG_SYS_POKEDEX_GET (0x829 -> byte 0x0FE5 bit 0x02)
+    ram[sb1 + 0x0FE5] = 0x02
+
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+    ctx = strat.build_context(
+        {"map_bank": 3, "map_id": 1, "p1_lvl": 7, "p1_hp": 22, "p1_maxhp": 24},
+        ram,
+        in_battle=False,
+        total_flags=124,
+    )
+    assert ctx["has_pokedex"] is True
+    g = strat._heuristic_goal(ctx)
+    assert (g.target_map_bank, g.target_map_id) == (3, 20)
+    assert g.navigation_hint == "north"
+    strat.close()
+
+
+def test_vision_ignores_oaks_lab_floor_false_dialogue():
+    vision = VisionEngine()
+    frame = np.full((160, 240, 3), 100, dtype=np.uint8)
+    # Simula piso claro do Lab com sombras/mobiliario (bright_ratio=0.580 < 0.65, dark_ratio=0.100, mean=197.8)
+    box = np.full((40, 224, 3), 155, dtype=np.uint8)
+    box[:, :130] = 240
+    box[25:, 130:190] = 90
+    frame[112:152, 8:232] = box
+    assert vision.detect_state(frame) == GameState.OVERWORLD

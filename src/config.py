@@ -184,9 +184,13 @@ class Config:
     first_strike_bonus:       float = 4.0
 
     # [FIX v19] Dynamic Battle Curriculum (rodinhas de bicicleta)
-    # Bloqueia (NO-OP) direcionais, start e select nas batalhas até bater 10% de win rate.
-    enable_battle_curriculum:      bool  = True
-    curriculum_win_rate_threshold: float = 0.10
+    # Desativado apos superarmos o plato inicial para permitir D-pad/RUN e recuperacao de cursor em batalha.
+    enable_battle_curriculum:             bool  = False
+    curriculum_win_rate_threshold:        float = 0.10
+    max_potion_macro_attempts_per_battle: int   = 2
+    potion_macro_cooldown_steps:          int   = 12
+    max_tm_macro_attempts_per_episode:    int   = 2
+    wasted_macro_penalty:                 float = -0.25
 
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0

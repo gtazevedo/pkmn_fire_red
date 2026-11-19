@@ -199,3 +199,13 @@ def test_battle_callback_and_encrypted_bag_pockets():
     # bagPocket_TMHM em 0x0464: 1 TM (289) XORado com enc_key
     struct.pack_into("<HH", ram, sb1_off + 0x0464, 289, 1 ^ enc_key)
     assert RamReader.get_tms_count(ram) == 1
+
+
+def test_has_pokedex_flag_bit():
+    sb1_off = 0x025000
+    ram = _make_ram(sb1_offset=sb1_off)
+    assert RamReader.has_pokedex(ram) is False
+
+    # FLAG_SYS_POKEDEX_GET = 0x829 -> offset 0x0FE5 bit 0x02
+    ram[sb1_off + RamReader._POKEDEX_FLAG_OFFSET] = RamReader._POKEDEX_FLAG_MASK
+    assert RamReader.has_pokedex(ram) is True

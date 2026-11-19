@@ -26,6 +26,8 @@ class RamReader:
     _ENEMY_PARTY_OFFSET = 0x2402C
     _MON_STRUCT_SIZE = 100
     _BADGES_FLAG_OFFSET = 0x0EE0 + (0x820 >> 3)  # 0x0FE4 em SaveBlock1 (bits 0..7 = 8 insígnias)
+    _POKEDEX_FLAG_OFFSET = 0x0EE0 + (0x829 >> 3)  # 0x0FE5 (FLAG_SYS_POKEDEX_GET = 0x829)
+    _POKEDEX_FLAG_MASK = 1 << (0x829 & 7)         # 0x02
 
     @staticmethod
     def _clamp(val, lo: int, hi: int) -> int:
@@ -146,6 +148,16 @@ class RamReader:
     @classmethod
     def has_oaks_parcel(cls, ram_array) -> bool:
         return 349 in cls.get_key_items(ram_array)
+
+    @classmethod
+    def has_pokedex(cls, ram_array) -> bool:
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        if wram_offset == 0:
+            return False
+        idx = wram_offset + cls._POKEDEX_FLAG_OFFSET
+        if len(ram_array) <= idx:
+            return False
+        return bool(int(ram_array[idx]) & cls._POKEDEX_FLAG_MASK)
 
     @classmethod
     def get_potions_count(cls, ram_array) -> int:

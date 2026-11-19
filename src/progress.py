@@ -27,14 +27,14 @@ class ProgressManager:
         (3, 1): 2,
         (5, 4): 3,
         (5, 3): 4,
-        (3, 20): 10,
-        (1, 0): 11,
-        (3, 2): 12,
-        (6, 2): 13,
-        (3, 21): 14,
-        (1, 1): 15,
-        (3, 22): 16,
-        (3, 3): 17,
+        (3, 20): 13,
+        (1, 0): 14,
+        (3, 2): 15,
+        (6, 2): 16,
+        (3, 21): 17,
+        (1, 1): 18,
+        (3, 22): 19,
+        (3, 3): 20,
     }
     PARCEL_PROGRESSION_RANK: dict[tuple[int, int], int] = {
         (5, 3): 5,
@@ -42,6 +42,19 @@ class ProgressManager:
         (3, 19): 7,
         (3, 0): 8,
         (4, 3): 9,
+    }
+    POST_POKEDEX_PROGRESSION_RANK: dict[tuple[int, int], int] = {
+        (3, 0): 10,
+        (3, 19): 11,
+        (3, 1): 12,
+        (3, 20): 13,
+        (1, 0): 14,
+        (3, 2): 15,
+        (6, 2): 16,
+        (3, 21): 17,
+        (1, 1): 18,
+        (3, 22): 19,
+        (3, 3): 20,
     }
 
     def __init__(self, progress_dir: Optional[str] = None, state_file: Optional[str] = None):
@@ -63,19 +76,7 @@ class ProgressManager:
         if not self._saved_states:
             return CFG.state_file
 
-        has_geo_milestones = any(self._state_rank(p) > 0 for p in self._saved_states)
-        if has_geo_milestones:
-            sorted_states = sorted(
-                self._saved_states,
-                key=lambda p: (
-                    self._state_rank(p) >= 5,
-                    self._state_rank(p) > 0,
-                    self._state_rank(p),
-                    self._state_sort_key(p),
-                ),
-            )
-        else:
-            sorted_states = sorted(self._saved_states, key=self._state_sort_key)
+        sorted_states = sorted(self._saved_states, key=self._progression_key)
         n = len(sorted_states)
 
         if n == 1:
@@ -181,12 +182,14 @@ class ProgressManager:
         map_key: tuple[int, int],
         env_id: int,
         has_parcel: bool = False,
+        has_pokedex: bool = False,
     ) -> float:
-        rank = (
-            self.PARCEL_PROGRESSION_RANK.get(map_key, 0)
-            if has_parcel
-            else self.MAP_PROGRESSION_RANK.get(map_key, 0)
-        )
+        if has_pokedex:
+            rank = self.POST_POKEDEX_PROGRESSION_RANK.get(map_key, 0)
+        elif has_parcel:
+            rank = self.PARCEL_PROGRESSION_RANK.get(map_key, 0)
+        else:
+            rank = self.MAP_PROGRESSION_RANK.get(map_key, 0)
         if rank == 0:
             return 0.0
         if rank > self._best_map_rank or total_flags > self._best_flags_ever:
@@ -207,11 +210,36 @@ class ProgressManager:
                 if not already_exists:
                     log.info(
                         f"[Env {env_id}] 🗺️ NEW MAP MILESTONE: map={map_key} rank={rank} "
-                        f"parcel={has_parcel} flags={total_flags} → {state_path}"
+                        f"parcel={has_parcel} pokedex={has_pokedex} flags={total_flags} → {state_path}"
                     )
             except Exception as e:
                 log.warning(f"[Env {env_id}] Falha ao salvar map milestone: {e}")
         return 0.0
+
+    @staticmethod
+    def _state_flags(path: str) -> int:
+        basename = os.path.basename(path)
+        match = re.match(r"events_(\d+)", basename)
+        if match:
+            return int(match.group(1))
+        if "pallet_exterior" in basename:
+            return 1
+        return 0
+
+    @classmethod
+    def _progression_key(cls, path: str) -> tuple[int, int, int, float]:
+        flags = cls._state_flags(path)
+        rank = cls._state_rank(path)
+        if rank >= 10 or flags >= 125:
+            stage = 3
+        elif flags >= 124:
+            stage = 2
+        elif rank > 0:
+            stage = 1
+        else:
+            stage = 0
+        parcel_sub = 1 if (stage == 1 and rank >= 5) else 0
+        return (stage, parcel_sub, rank, cls._state_sort_key(path))
 
     @staticmethod
     def _state_rank(path: str) -> int:

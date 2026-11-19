@@ -169,6 +169,7 @@ class Strategist:
         badges = RamReader.badges(info)
 
         has_parcel = RamReader.has_oaks_parcel(ram_array) if ram_array is not None else False
+        has_pokedex = RamReader.has_pokedex(ram_array) if ram_array is not None else False
         potions = RamReader.get_potions_count(ram_array) if ram_array is not None else 0
         tms = RamReader.get_tms_count(ram_array) if ram_array is not None else 0
 
@@ -187,6 +188,7 @@ class Strategist:
             "badges": badges,
             "event_flags": total_flags,
             "has_oaks_parcel": has_parcel,
+            "has_pokedex": has_pokedex,
             "potions": potions,
             "tms": tms,
             "in_battle": in_battle,
@@ -224,7 +226,8 @@ class Strategist:
             f"pos=({context['player_x']},{context['player_y']}), "
             f"party_lvl={context['party_level']}, hp_pct={context['party_hp_pct']}, "
             f"badges={context['badges']}, flags={context['event_flags']}, "
-            f"has_oaks_parcel={context['has_oaks_parcel']}, potions={context['potions']}, "
+            f"has_oaks_parcel={context['has_oaks_parcel']}, has_pokedex={context.get('has_pokedex', False)}, "
+            f"potions={context['potions']}, "
             f"in_battle={context['in_battle']}, steps_on_map={context['steps_on_map']}.\n"
             f"{suggestion_line}"
             f"RamAdvisor last_dialogue: \"{dialog_snippet}\" | recent: \"{recent}\"\n"
@@ -429,7 +432,8 @@ class Strategist:
             bank == 3
             and mid == 1
             and not has_parcel
-            and context.get("event_flags", 0) < 126
+            and not context.get("has_pokedex", False)
+            and context.get("event_flags", 0) < 124
             and context.get("badges", 0) == 0
         ):
             return StrategicGoal(

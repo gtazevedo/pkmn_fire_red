@@ -67,6 +67,10 @@ class PokemonEnv(gym.Env):
         self._steps_interior_only: int = 0        # contador de steps só em bank=4
         self._battle_screenshot_saved: bool = False
         self._had_parcel_in_ep: bool = False
+        self._battle_potion_attempts: int = 0
+        self._battle_potion_cooldown: int = 0
+        self._episode_tm_attempts: int = 0
+        self._last_overworld_tile: tuple = ()
 
     @property
     def max_steps(self) -> int:
@@ -311,6 +315,10 @@ class PokemonEnv(gym.Env):
         self._battle_screenshot_saved = False
         self._had_parcel_in_ep = RamReader.has_oaks_parcel(ram_post_reset)
         self._parcel_delivered_in_ep = False
+        self._battle_potion_attempts = 0
+        self._battle_potion_cooldown = 0
+        self._episode_tm_attempts = 0
+        self._last_overworld_tile = ()
 
         # [FIX v15-Stairs] Reset do controle de loop
         self._map_history.clear()
@@ -372,6 +380,12 @@ class PokemonEnv(gym.Env):
             or (not _in_battle_now and _not_in_overworld and _cb2 != 0)
         )
 
+        if not _in_battle_now:
+            self._battle_potion_attempts = 0
+            self._battle_potion_cooldown = 0
+        elif self._battle_potion_cooldown > 0:
+            self._battle_potion_cooldown -= 1
+
         # [FIX v22 / v30b] Tactical Macro Execution com anti-farming real
         macro_reward = 0.0
         if action_name == "TACTICAL_MACRO":
@@ -380,8 +394,16 @@ class PokemonEnv(gym.Env):
             cur_hp = RamReader.party_hp(info)
             max_hp = max(RamReader.party_max_hp(info), 1)
 
-            if _in_battle_now and potions > 0 and cur_hp < max_hp * 0.5:
-                # Executa a Macro de Poção (Botão Tático) somente com HP < 50%
+            if (
+                _in_battle_now
+                and not _script_lock
+                and potions > 0
+                and 0 < cur_hp < max_hp * 0.45
+                and self._battle_potion_attempts < CFG.max_potion_macro_attempts_per_battle
+                and self._battle_potion_cooldown == 0
+            ):
+                self._battle_potion_attempts += 1
+                self._battle_potion_cooldown = CFG.potion_macro_cooldown_steps
                 self._run_potion_macro()
                 ram_after = self.env.get_ram()
                 RamReader.enrich_info_from_ram(info, ram_after)
@@ -391,10 +413,15 @@ class PokemonEnv(gym.Env):
                     macro_reward += 100.0
                     log.info(f"[Env {self.env_id}] 💊 TACTICAL MACRO SUCCESS: Potion Triggered! ({cur_hp}->{hp_after} HP)")
                 else:
-                    macro_reward -= 0.05
+                    macro_reward += CFG.wasted_macro_penalty
                 ram_array = ram_after
-            elif not _in_battle_now and tms > 0:
-                # Executa a Macro de TM e Reordenação (Botão Tático)
+            elif (
+                not _in_battle_now
+                and not _script_lock
+                and tms > 0
+                and self._episode_tm_attempts < CFG.max_tm_macro_attempts_per_episode
+            ):
+                self._episode_tm_attempts += 1
                 self._run_tm_macro()
                 ram_after = self.env.get_ram()
                 RamReader.enrich_info_from_ram(info, ram_after)
@@ -402,11 +429,11 @@ class PokemonEnv(gym.Env):
                     macro_reward += 500.0
                     log.info(f"[Env {self.env_id}] 💿 TACTICAL MACRO SUCCESS: TM Teaching Triggered!")
                 else:
-                    macro_reward -= 0.05
+                    macro_reward += CFG.wasted_macro_penalty
                 ram_array = ram_after
             else:
-                # [FIX v23] Punição leve para queimar a mão do agente se ele spammar o botão no vazio
-                macro_reward -= 0.05
+                # [FIX v23] Punição para queimar a mão do agente ao spammar o botão fora de hora
+                macro_reward += CFG.wasted_macro_penalty
         
         # [USER REQUEST] Salvar print da tela quando iniciar a batalha (após fade-in)
         if not _in_battle_now:
@@ -454,7 +481,13 @@ class PokemonEnv(gym.Env):
         tile     = (map_bank, map_id, x, y)
         map_key  = (map_bank, map_id)
 
+        if not _in_battle_now:
+            if self._last_overworld_tile and tile != self._last_overworld_tile:
+                self._advisor.dialogue_stuck_steps = 0
+            self._last_overworld_tile = tile
+
         has_parcel_now = RamReader.has_oaks_parcel(ram_array)
+        has_pokedex_now = RamReader.has_pokedex(ram_array)
         if has_parcel_now and not self._had_parcel_in_ep:
             self._had_parcel_in_ep = True
             step_reward += self._rewards.add("milestone", CFG.parcel_pickup_bonus)
@@ -581,6 +614,7 @@ class PokemonEnv(gym.Env):
                     map_key,
                     self.env_id,
                     has_parcel=has_parcel_now,
+                    has_pokedex=has_pokedex_now,
                 )
 
             nav_hint = self._strategist.current_goal.navigation_hint

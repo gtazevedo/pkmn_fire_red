@@ -1,6 +1,7 @@
 import os
 import time
 import shutil
+from typing import Optional
 import mlflow
 from collections import deque
 import numpy as np
@@ -56,6 +57,7 @@ class PokemonCallback(BaseCallback):
 
         self._total_episodes  = 0
         self._last_log_step   = 0
+        self._last_score: Optional[float] = None
         self._training_start: float = time.time()
 
     def _on_training_start(self) -> None:
@@ -112,6 +114,7 @@ class PokemonCallback(BaseCallback):
 
     def _record_progress(self, m: dict) -> None:
         score = self._progress_score(m)
+        self._last_score = score
         self.logger.record("progress/score",           score)
         self.logger.record("progress/milestone_pct",   max(m["best_milestone"] + 1, 0) / 9.0 * 100)
         self.logger.record("progress/badges",          m["badges"])
@@ -467,6 +470,8 @@ class Trainer:
                     score = float(ntv["progress/score"])
             except Exception:
                 score = None
+            if score is None and hasattr(self, "_pokemon_cb"):
+                score = getattr(self._pokemon_cb, "_last_score", None)
 
             tags = {
                 "timesteps": str(int(timesteps)),
@@ -575,4 +580,7 @@ class Trainer:
             log.info("Done.")
 
         finally:
-            self._env.close()
+            try:
+                self._env.close()
+            except (BrokenPipeError, EOFError, OSError) as exc:
+                log.warning(f"Ignoring env close error during shutdown: {exc}")
