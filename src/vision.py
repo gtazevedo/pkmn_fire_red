@@ -79,7 +79,7 @@ class VisionEngine:
             return True
         if mean_val > 175:
             bright_ratio = float(np.mean(dialogue_box > 220))
-            dark_ratio = float(np.mean(dialogue_box < 90))
+            dark_ratio = float(np.mean(dialogue_box < 140))
             if bright_ratio > 0.50 and dark_ratio > 0.02:
                 return True
 

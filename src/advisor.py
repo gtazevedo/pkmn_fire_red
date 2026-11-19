@@ -65,6 +65,7 @@ class RamAdvisor:
         self.seen_dialogues: set[str] = set()
         self.recent_dialogues: list[str] = []
         self.repeat_penalties: int = 0
+        self.dialogue_stuck_steps: int = 0
 
     @property
     def last_decoded_text(self) -> str:
@@ -90,6 +91,9 @@ class RamAdvisor:
 
         text_changed = False
         repeat_penalty = 0.0
+        dialogue_progress_reward = 0.0
+        dialogue_freeze_penalty = 0.0
+        prev_text = self._last_decoded_text.strip()
         # Só lê o EWRAM de texto se o jogador estiver travado numa animação/script de NPC ou na batalha.
         # Isso previne o "text farming exploit", onde o agente ficava apertando "A" para o vento lendo o lixo na RAM.
         if (script_lock or in_battle) and ram_array is not None and len(ram_array) > 138520 + 256:
@@ -100,6 +104,12 @@ class RamAdvisor:
             self._last_decoded_text = decoded_text
 
             norm_text = decoded_text.strip()
+            advanced_unseen_dialogue = (
+                bool(prev_text)
+                and bool(norm_text)
+                and text_changed
+                and (norm_text not in self.seen_dialogues)
+            )
             if norm_text and text_changed:
                 if not self.recent_dialogues or self.recent_dialogues[-1] != norm_text:
                     self.recent_dialogues.append(norm_text)
@@ -110,8 +120,27 @@ class RamAdvisor:
                     self.repeat_penalties += 1
                 else:
                     self.seen_dialogues.add(norm_text)
+                    if (
+                        advanced_unseen_dialogue
+                        and not in_battle
+                        and action_idx in (self.A_IDX, self.B_IDX)
+                    ):
+                        dialogue_progress_reward = CFG.dialogue_advance_bonus
         else:
             self._last_decoded_text = ""
+
+        if script_lock and not in_battle:
+            if text_changed:
+                self.dialogue_stuck_steps = 0
+            else:
+                self.dialogue_stuck_steps += 1
+            if (
+                self.dialogue_stuck_steps >= CFG.dialogue_stuck_grace
+                and action_idx not in (self.A_IDX, self.B_IDX)
+            ):
+                dialogue_freeze_penalty = CFG.dialogue_stuck_penalty
+        else:
+            self.dialogue_stuck_steps = 0
 
         # Classifica a situação usando regras de texto se o texto existir
         if decoded_text.strip():
@@ -154,7 +183,12 @@ class RamAdvisor:
         self._last_situation    = situation
         self._current_situation = situation
 
-        return self._compute_bonus(situation, action_idx, text_changed) + repeat_penalty
+        return (
+            self._compute_bonus(situation, action_idx, text_changed)
+            + repeat_penalty
+            + dialogue_progress_reward
+            + dialogue_freeze_penalty
+        )
 
     def get_embedding(self) -> np.ndarray:
         sit = self._current_situation
@@ -194,6 +228,7 @@ class RamAdvisor:
         self.seen_dialogues.clear()
         self.recent_dialogues.clear()
         self.repeat_penalties   = 0
+        self.dialogue_stuck_steps = 0
 
     def stats_dict(self) -> dict:
         return {
@@ -206,6 +241,7 @@ class RamAdvisor:
             "advisor/hints_matched":  self.hints_matched,
             "advisor/total_bonus":    self.total_bonus,
             "advisor/repeat_penalties": self.repeat_penalties,
+            "advisor/dialogue_stuck_steps": self.dialogue_stuck_steps,
         }
 
     MAX_TEXT_BONUS = 50.0  # Limite máximo de bônus ganho por textos por episódio

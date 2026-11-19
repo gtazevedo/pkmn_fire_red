@@ -313,6 +313,7 @@ class PokemonEnv(gym.Env):
         self._last_raw_frame = raw_frame
         self._battle_screenshot_saved = False
         self._had_parcel_in_ep = RamReader.has_oaks_parcel(ram_post_reset)
+        self._parcel_delivered_in_ep = False
 
         # [FIX v15-Stairs] Reset do controle de loop
         self._map_history.clear()
@@ -459,14 +460,29 @@ class PokemonEnv(gym.Env):
         has_parcel_now = RamReader.has_oaks_parcel(ram_array)
         if has_parcel_now and not self._had_parcel_in_ep:
             self._had_parcel_in_ep = True
+            step_reward += self._rewards.add("milestone", CFG.parcel_pickup_bonus)
             self._explore_reward_per_map.clear()
             self._stats.tile_visits.clear()
             self._stats.map_visits = {map_key}
+            self._stats.x_min_episode = x
+            self._stats.x_max_episode = x
             self._stats.y_min_episode = y
             self._stats.y_max_episode = y
             log.info(
-                f"[Env {self.env_id}] 📦 Oak's Parcel obtido! "
-                "Resetando exploração para viagem de retorno ao Lab."
+                f"[Env {self.env_id}] 📦 Oak's Parcel obtido! +{CFG.parcel_pickup_bonus:.1f} "
+                "— resetando exploração para viagem de retorno ao Lab."
+            )
+        elif (
+            self._had_parcel_in_ep
+            and not has_parcel_now
+            and not self._parcel_delivered_in_ep
+            and map_key == (4, 3)
+        ):
+            self._parcel_delivered_in_ep = True
+            step_reward += self._rewards.add("milestone", CFG.parcel_delivery_bonus)
+            log.info(
+                f"[Env {self.env_id}] 🎉 Oak's Parcel entregue ao Prof. Oak! "
+                f"+{CFG.parcel_delivery_bonus:.1f}"
             )
 
         # [FIX v18.1] Salva dinamicamente o state exterior apenas quando ele está
@@ -550,7 +566,9 @@ class PokemonEnv(gym.Env):
             if is_new_map:
                 map_disc_bonus = CFG.new_map_bonus_route if map_bank == 3 else CFG.new_map_bonus
                 step_reward += self._rewards.add("map_disc", map_disc_bonus)
-                # Reset y bounds on map transition so entering a map doesn't give a free bonus
+                # Reset directional bounds on map transition so entering a map doesn't give a free bonus
+                self._stats.x_min_episode = x
+                self._stats.x_max_episode = x
                 self._stats.y_min_episode = y
                 self._stats.y_max_episode = y
 
@@ -569,20 +587,31 @@ class PokemonEnv(gym.Env):
                 )
 
             nav_hint = self._strategist.current_goal.navigation_hint
-            if nav_hint == "south":
-                if y > self._stats.y_max_episode:
-                    south_steps = y - self._stats.y_max_episode
-                    south_r = south_steps * CFG.north_bonus_per_tile
-                    self._stats.y_max_episode = y
-                    step_reward += self._rewards.add("milestone", south_r)
-                    log.debug(f"[Env {self.env_id}] South return progress! y={y} (+{south_r:.1f})")
-            elif y < self._stats.y_min_episode:
+            if nav_hint == "south" and y > self._stats.y_max_episode:
+                delta = y - self._stats.y_max_episode
+                self._stats.y_max_episode = y
+                dir_r = delta * CFG.north_bonus_per_tile
+                step_reward += self._rewards.add("milestone", dir_r)
+                log.debug(f"[Env {self.env_id}] South return progress! y={y} (+{dir_r:.1f})")
+            elif nav_hint == "east" and x > self._stats.x_max_episode:
+                delta = x - self._stats.x_max_episode
+                self._stats.x_max_episode = x
+                dir_r = delta * CFG.north_bonus_per_tile
+                step_reward += self._rewards.add("milestone", dir_r)
+                log.debug(f"[Env {self.env_id}] East progress! x={x} (+{dir_r:.1f})")
+            elif nav_hint == "west" and x < self._stats.x_min_episode:
+                delta = self._stats.x_min_episode - x
+                self._stats.x_min_episode = x
+                dir_r = delta * CFG.north_bonus_per_tile
+                step_reward += self._rewards.add("milestone", dir_r)
+                log.debug(f"[Env {self.env_id}] West progress! x={x} (+{dir_r:.1f})")
+            elif nav_hint not in ("south", "east", "west") and y < self._stats.y_min_episode:
                 # North bonus: y decresce ao ir para norte no FireRed
-                north_steps = self._stats.y_min_episode - y
-                north_r = north_steps * CFG.north_bonus_per_tile
+                delta = self._stats.y_min_episode - y
                 self._stats.y_min_episode = y
-                step_reward += self._rewards.add("milestone", north_r)
-                log.debug(f"[Env {self.env_id}] North progress! y={y} (+{north_r:.1f})")
+                dir_r = delta * CFG.north_bonus_per_tile
+                step_reward += self._rewards.add("milestone", dir_r)
+                log.debug(f"[Env {self.env_id}] North progress! y={y} (+{dir_r:.1f})")
         else:
             is_new_map = False
 
@@ -595,6 +624,12 @@ class PokemonEnv(gym.Env):
         # [FIX v28] Early Stop por inatividade em vez de ficar drenando a Value Network com punição.
         if self._stats.steps_on_cur_tile >= CFG.stuck_threshold and not (_in_battle_now or _script_lock):
             log.info(f"[Env {self.env_id}] 🚨 STUCK (parado na mesma coordenada). Early Stop!")
+            terminated = True
+        elif self._advisor.dialogue_stuck_steps >= CFG.dialogue_stuck_terminate and not _in_battle_now:
+            log.info(
+                f"[Env {self.env_id}] 💬 DIALOGUE FREEZE "
+                f"({self._advisor.dialogue_stuck_steps} steps sem avanço). Early Stop!"
+            )
             terminated = True
 
         dmg_reward, idle_pen, vic_bonus, is_new_battle, whiteout_pen, farm_terminate = self._stats.update_battle(
@@ -629,23 +664,23 @@ class PokemonEnv(gym.Env):
             step_reward += self._rewards.add("entry", actual_entry)
             log.debug(f"[Env {self.env_id}] Battle entered! +{actual_entry:.1f} entry bonus")
 
-        # [FIX v14-B] First Strike Reward
+        # [FIX v14-B] First Strike Reward (com fadiga por mapa)
+        battle_fatigue = self._stats.current_battle_fatigue() if _in_battle_now else 1.0
         if _in_battle_now and self._stats.current_battle_damage > 0 and not getattr(self._stats, 'first_strike_paid', False):
             self._stats.first_strike_paid = True
-            fatigue = 0.5 ** max(0, self._stats.battles_fought - 1)
-            actual_first_strike = CFG.first_strike_bonus * fatigue
+            actual_first_strike = CFG.first_strike_bonus * battle_fatigue
             step_reward += self._rewards.add("damage", actual_first_strike)
-            log.info(f"[Env {self.env_id}] First Strike! +{actual_first_strike:.1f} (fatigue={fatigue:.2f})")
+            log.info(f"[Env {self.env_id}] First Strike! +{actual_first_strike:.1f} (fatigue={battle_fatigue:.2f})")
 
         if _in_battle_now:
             step_reward += self._rewards.add("text", CFG.battle_sustain_bonus)
 
-        # [FIX v11-D] A bonus em batalha com cap aumentado
+        # [FIX v11-D] A bonus em batalha escalado pela fadiga por mapa
         if _in_battle_now and not _script_lock and action_idx == ActionSpace.NAMES.index("A"):
             self._stats.battle_total_a += 1
             if self._stats.battle_a_presses < CFG.battle_a_cap:
                 self._stats.battle_a_presses += 1
-                step_reward += self._rewards.add("text", CFG.battle_a_bonus)
+                step_reward += self._rewards.add("text", CFG.battle_a_bonus * battle_fatigue)
 
         # [FIX v11-B] B penalty só após battle_b_threshold A presses
         if (_in_battle_now and not _script_lock and
@@ -655,7 +690,11 @@ class PokemonEnv(gym.Env):
 
         step_reward += self._rewards.add(
             "levelup",
-            self._stats.update_level(RamReader.party_level(info), self.env_id),
+            self._stats.update_level(
+                RamReader.party_level(info),
+                self.env_id,
+                badges=RamReader.badges(info),
+            ),
         )
 
         step_reward += self._rewards.add(

@@ -287,6 +287,44 @@ def test_strategist_anti_echo_and_kanto_prompt_and_battle_skip(monkeypatch):
     strat.close()
 
 
+def test_advisor_anti_dialogue_freeze_and_vision_blue_text():
+    advisor = RamAdvisor()
+    ram1 = _ram_with_dialogue("OAK")
+    ram2 = _ram_with_dialogue("You need your own POKeMON!")
+    ram3 = _ram_with_dialogue("Here, choose a POKeMON!")
+
+    # Abertura inicial da fala: sem bonus de avanco, dialogue_stuck_steps == 0
+    r_open = advisor.update(in_battle=False, script_lock=True, action_idx=0, ram_array=ram1)
+    assert r_open == 0.0
+    assert advisor.dialogue_stuck_steps == 0
+
+    # Avancar para segunda fala inedita com A recompensa +dialogue_advance_bonus
+    r_adv = advisor.update(in_battle=False, script_lock=True, action_idx=0, ram_array=ram2)
+    assert np.isclose(r_adv, CFG.dialogue_advance_bonus)
+    assert advisor.dialogue_stuck_steps == 0
+
+    # Ficar travado 24 steps apertando UP (2) nao penaliza ainda; no step 25 aplica penalidade leve
+    for _ in range(CFG.dialogue_stuck_grace - 1):
+        r_wait = advisor.update(in_battle=False, script_lock=True, action_idx=2, ram_array=ram2)
+        assert r_wait == 0.0
+    r_stuck = advisor.update(in_battle=False, script_lock=True, action_idx=2, ram_array=ram2)
+    assert np.isclose(r_stuck, CFG.dialogue_stuck_penalty)
+    assert advisor.dialogue_stuck_steps == CFG.dialogue_stuck_grace
+
+    # Mudar para nova fala reseta dialogue_stuck_steps
+    r_next = advisor.update(in_battle=False, script_lock=True, action_idx=1, ram_array=ram3)
+    assert np.isclose(r_next, CFG.dialogue_advance_bonus)
+    assert advisor.dialogue_stuck_steps == 0
+
+    # VisionEngine detecta dialogo com texto azul masculino (luminancia ~114 < 140)
+    vision = VisionEngine()
+    frame = np.full((160, 240, 3), 100, dtype=np.uint8)
+    box = np.full((40, 224, 3), 245, dtype=np.uint8)
+    box[8:20, 20:190] = (60, 110, 210)
+    frame[112:152, 8:232] = box
+    assert vision.detect_state(frame) == GameState.DIALOGUE
+
+
 def test_strategist_schema_and_3b_guardrails(monkeypatch):
     captured = []
 

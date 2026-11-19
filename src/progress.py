@@ -58,7 +58,19 @@ class ProgressManager:
         if not self._saved_states:
             return CFG.state_file
 
-        sorted_states = sorted(self._saved_states, key=self._state_sort_key)
+        has_geo_milestones = any(self._state_rank(p) > 0 for p in self._saved_states)
+        if has_geo_milestones:
+            sorted_states = sorted(
+                self._saved_states,
+                key=lambda p: (
+                    self._state_rank(p) >= 5,
+                    self._state_rank(p) > 0,
+                    self._state_rank(p),
+                    self._state_sort_key(p),
+                ),
+            )
+        else:
+            sorted_states = sorted(self._saved_states, key=self._state_sort_key)
         n = len(sorted_states)
 
         if n == 1:
@@ -153,9 +165,9 @@ class ProgressManager:
             if has_parcel
             else self.MAP_PROGRESSION_RANK.get(map_key, 0)
         )
-        if rank == 0 or total_flags < max(0, self._best_flags_ever - 1):
+        if rank == 0:
             return 0.0
-        if total_flags > self._best_flags_ever or rank > self._best_map_rank:
+        if rank > self._best_map_rank or total_flags > self._best_flags_ever:
             state_path = os.path.join(
                 self._progress_dir,
                 f"events_{total_flags:03d}_m{rank:02d}_{map_key[0]}_{map_key[1]}.state",
@@ -178,6 +190,12 @@ class ProgressManager:
             except Exception as e:
                 log.warning(f"[Env {env_id}] Falha ao salvar map milestone: {e}")
         return 0.0
+
+    @staticmethod
+    def _state_rank(path: str) -> int:
+        basename = os.path.basename(path)
+        match = re.match(r"events_\d+_m(\d+)(?:_\d+_\d+)?\.state$", basename)
+        return int(match.group(1)) if match else 0
 
     @staticmethod
     def _state_sort_key(path: str) -> float:
@@ -211,11 +229,8 @@ class ProgressManager:
             if match:
                 num = int(match.group(1))
                 rank = int(match.group(2)) if match.group(2) else 0
-                if num > max_flag:
-                    max_flag = num
-                    max_rank = rank
-                elif num == max_flag and rank > max_rank:
-                    max_rank = rank
+                max_flag = max(max_flag, num)
+                max_rank = max(max_rank, rank)
 
         self._best_flags_ever = max_flag
         self._best_map_rank = max_rank
@@ -320,6 +335,10 @@ class EpisodeStats:
     battle_idle_steps: int  = 0
     y_min_episode:     int  = 255
     y_max_episode:     int  = 0
+    x_min_episode:     int  = 255
+    x_max_episode:     int  = 0
+    map_battles:       defaultdict = field(default_factory=lambda: defaultdict(int))
+    current_battle_map: tuple = field(default_factory=tuple)
     # [FIX v11-D] Conta presses de A recompensados na batalha atual
     battle_a_presses:  int  = 0
     # [FIX v11-B] Conta presses de A totais na batalha (para threshold de B penalty)
@@ -393,6 +412,13 @@ class EpisodeStats:
         self.was_in_battle     = False
         self.last_badges       = RamReader.badges(info)
         self.battle_idle_steps = 0
+        if "player_x" in info:
+            init_x = RamReader.coord(info, "player_x")
+            self.x_min_episode = init_x
+            self.x_max_episode = init_x
+        else:
+            self.x_min_episode = 255
+            self.x_max_episode = 0
         if "player_y" in info:
             init_y = RamReader.coord(info, "player_y")
             self.y_min_episode = init_y
@@ -400,6 +426,8 @@ class EpisodeStats:
         else:
             self.y_min_episode = 255
             self.y_max_episode = 0
+        self.map_battles        = defaultdict(int)
+        self.current_battle_map = ()
         self.battle_a_presses  = 0
         self.battle_total_a    = 0
         self.post_battle_grace_remaining = 0
@@ -517,6 +545,16 @@ class EpisodeStats:
             return CFG.stuck_penalty
         return 0.0
 
+    def current_battle_fatigue(self) -> float:
+        n = self.map_battles.get(self.current_battle_map, self.battles_fought)
+        if n <= 1:
+            return 1.0
+        if n == 2:
+            return 0.5
+        if n == 3:
+            return 0.2
+        return 0.0
+
     def update_battle(self, in_battle: bool, enemy_hp: int, party_hp: int,
                        script_lock: bool,
                        last_raw_frame: Optional[np.ndarray], env_id: int,
@@ -539,6 +577,12 @@ class EpisodeStats:
             self.first_strike_paid       = False   # [FIX v14-B] reset per battle
             self.battles_fought         += 1
             self.global_battles_fought  += 1
+            self.current_battle_map      = (
+                (current_tile[0], current_tile[1])
+                if current_tile and len(current_tile) >= 2
+                else (-1, -1)
+            )
+            self.map_battles[self.current_battle_map] += 1
             self.battle_idle_steps       = 0
             self.battle_a_presses        = 0
             self.battle_total_a          = 0
@@ -546,6 +590,8 @@ class EpisodeStats:
             self.steps_in_battle_current  = 0
             self.current_battle_damage    = 0
             is_new_battle = True
+
+        fatigue = self.current_battle_fatigue()
 
         if in_battle:
             self.battle_steps_total      += 1
@@ -564,9 +610,9 @@ class EpisodeStats:
 
                 if self.initial_enemy_hp > 0:
                     hp_pct_dealt = dmg / self.initial_enemy_hp
-                    reward = hp_pct_dealt * CFG.hp_pct_scale
+                    reward = hp_pct_dealt * CFG.hp_pct_scale * fatigue
                 else:
-                    reward = dmg * CFG.damage_weight
+                    reward = dmg * CFG.damage_weight * fatigue
 
                 self.battle_idle_steps = 0
 
@@ -574,11 +620,10 @@ class EpisodeStats:
                         self.initial_enemy_hp > 0 and
                         enemy_hp < self.initial_enemy_hp * 0.10 and
                         enemy_hp > 0):
-                    vic_bonus += CFG.near_ko_bonus
+                    vic_bonus += CFG.near_ko_bonus * fatigue
                     self.near_ko_paid = True
 
                 if enemy_hp == 0 and self.last_enemy_hp > 0:
-                    fatigue = 0.5 ** max(0, self.battles_fought - 1)
                     actual_vic_bonus = CFG.victory_bonus * fatigue
                     vic_bonus += actual_vic_bonus
                     self.victories += 1
@@ -620,7 +665,6 @@ class EpisodeStats:
 
         elif self.was_in_battle:
             if enemy_hp == 0 and self.last_enemy_hp > 0:
-                fatigue = 0.5 ** max(0, self.battles_fought - 1)
                 actual_vic_bonus = CFG.victory_bonus * fatigue
                 vic_bonus += actual_vic_bonus
                 self.victories += 1
@@ -666,7 +710,7 @@ class EpisodeStats:
         self.was_in_battle = in_battle
         return reward, idle_pen, vic_bonus, is_new_battle, whiteout_pen, farm_terminate
 
-    def update_level(self, current_level: int, env_id: int) -> float:
+    def update_level(self, current_level: int, env_id: int, badges: int = 0) -> float:
         if current_level == 0:
             return 0.0
 
@@ -686,10 +730,13 @@ class EpisodeStats:
             )
             self.max_level = current_level
             return 0.0
-        reward = delta * CFG.levelup_weight
+
+        level_cap = CFG.max_rewarded_level_base + max(0, int(badges)) * CFG.max_rewarded_level_per_badge
+        rewarded_delta = max(0, min(current_level, level_cap) - self.max_level)
+        reward = rewarded_delta * CFG.levelup_weight
         self.levels_gained += delta
         self.max_level      = current_level
-        log.info(f"[Env {env_id}] Level up! +{delta} → total={current_level}")
+        log.info(f"[Env {env_id}] Level up! +{delta} → total={current_level} (rew={reward:.1f}, cap={level_cap})")
         return reward
 
     def update_max_op_level(self, info: dict) -> float:

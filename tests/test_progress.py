@@ -222,3 +222,52 @@ def test_parcel_milestones_and_cross_worker_disk_sync(tmp_path):
     rng = random.Random(123)
     pm_worker_b.sample_state(rng=rng)
     assert str(parcel_file) in pm_worker_b._saved_states
+
+
+def test_anti_battle_junkie_fatigue_whiteout_and_level_cap(tmp_path):
+    stats = EpisodeStats()
+    stats.reset({"p1_lvl": 9, "p1_hp": 24, "p1_maxhp": 24})
+
+    # Batalhas 1..4 no mesmo mapa (3,19) devem decair 1.0 -> 0.5 -> 0.2 -> 0.0 em dano, near_ko e victory
+    observed = []
+    for _ in range(4):
+        stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 19, 5, 5), 9)
+        r_dmg, _, r_ko, _, _, _ = stats.update_battle(True, 1, 24, False, None, 0, 1, (3, 19, 5, 5), 9)
+        _, _, r_vic, _, _, _ = stats.update_battle(True, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 9)
+        stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 9)
+        observed.append((stats.current_battle_fatigue(), r_dmg, r_ko, r_vic))
+
+    assert [round(o[0], 2) for o in observed] == [1.0, 0.5, 0.2, 0.0]
+    assert observed[3][1:] == (0.0, 0.0, 0.0)
+
+    # Trocar para mapa novo (3,20) restaura fadiga 1.0
+    stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 20, 5, 5), 9)
+    assert stats.current_battle_fatigue() == 1.0
+
+    # Whiteout aplica penalidade configurada (-40.0)
+    _, _, _, _, whiteout_pen, _ = stats.update_battle(True, 20, 0, False, None, 0, 1, (3, 20, 5, 5), 9)
+    assert whiteout_pen == CFG.whiteout_penalty == -40.0
+
+    # Teto de nivel por insignia: lvl 10 paga, lvl 11 sem insignia paga 0, com 1 insignia volta a pagar
+    assert stats.update_level(10, env_id=0, badges=0) == CFG.levelup_weight
+    assert stats.update_level(11, env_id=0, badges=0) == 0.0
+    assert stats.update_level(12, env_id=0, badges=1) == CFG.levelup_weight
+
+    # Marco geografico com flags menores que o recorde global ainda salva e entra em frontier
+    for fl in range(112, 124):
+        (tmp_path / f"events_{fl:03d}.state").write_bytes(b"BASE")
+    pm = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+    fake_emu = SimpleNamespace(em=SimpleNamespace(get_state=lambda: b"PARCEL_116"))
+    pm.check_and_save_map_milestone(fake_emu, 116, (5, 3), env_id=0, has_parcel=True)
+    parcel_116 = str(tmp_path / "events_116_m05_5_3.state")
+    assert os.path.exists(parcel_116)
+
+    rng = random.Random(99)
+    frontier_hits = 0
+    parcel_hits = 0
+    for _ in range(200):
+        picked = pm.sample_state(rng=rng)
+        if picked == parcel_116:
+            parcel_hits += 1
+        frontier_hits += 1
+    assert parcel_hits > 15 and frontier_hits == 200

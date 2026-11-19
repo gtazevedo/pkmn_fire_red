@@ -157,16 +157,16 @@ class Config:
     # [FIX v11-D] battle_a_cap 20→50, battle_a_bonus 0.05→0.03
     # Cap de 20 bloqueava recompensa no meio da batalha. Aumentado para cobrir
     # navegação completa: FIGHT→move→confirmar→esperar = ~10-15 A presses.
-    battle_a_bonus:       float = 0.1
-    battle_a_cap:         int   = 100
+    battle_a_bonus:       float = 0.02
+    battle_a_cap:         int   = 25
 
     # [FIX v11-B] B penalty só depois de battle_b_threshold A presses
     # PWhiddy philosophy: zero punishments for menus/navigation
     battle_b_penalty:     float = 0.0
     battle_b_threshold:   int   = 999  # Disable b penalty
     
-    # PWhiddy philosophy: zero punishment for whiteout
-    whiteout_penalty:          float = 0.0
+    # Penalidade real de whiteout + fadiga por mapa anti-battle-junkie
+    whiteout_penalty:          float = -40.0
     whiteout_idle_multiplier:  float = 0.0
 
     # [FIX v12-B / v13-A] Anti-farming: threshold RANDOMIZADO por episódio
@@ -192,14 +192,22 @@ class Config:
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
     whiteout_entry_cooldown:   int   = 500
-    levelup_weight:       float = 200.0
+    levelup_weight:       float = 80.0
+    max_rewarded_level_base:      int   = 10
+    max_rewarded_level_per_badge: int   = 8
     badge_weight:         float = 50.0
     milestone_weight:     float = 10.0
+    parcel_pickup_bonus:   float = 150.0
+    parcel_delivery_bonus: float = 300.0
+    dialogue_advance_bonus:   float = 0.15
+    dialogue_stuck_grace:     int   = 25
+    dialogue_stuck_penalty:   float = -0.02
+    dialogue_stuck_terminate: int   = 200
     stuck_threshold:      int   = 150
     stuck_penalty:        float = -0.08
 
-    # [FIX v30b] Reduzido north_bonus_per_tile (2.0 → 0.5) para priorizar exploração e batalhas
-    north_bonus_per_tile: float = 0.5
+    # Bússola direcional reforçada (alinhada ao sub-objetivo N/S/L/O)
+    north_bonus_per_tile: float = 1.5
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
     # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
