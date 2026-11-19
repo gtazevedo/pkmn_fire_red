@@ -13,11 +13,14 @@ from src.reader import RamReader
 
 class ProgressManager:
     """
-    Currículo dinâmico baseado em Event Flags com amostragem priorizada (Frontier Bias).
+    Currículo dinâmico baseado em Event Flags com amostragem priorizada
+    (Frontier Bias + Genesis Anchor anti-esquecimento catastrófico).
     Distribuição alvo (com >= 3 states):
-      - ~50% nos estados de fronteira (maior contagem de Event Flags)
+      - ~50% nos estados de fronteira (maior contagem de Event Flags / marcos)
       - ~30% em estados intermediários recentes
-      - ~20% em estados iniciais (mitiga esquecimento catastrófico)
+      - ~20% em estados iniciais, dos quais ~60% (~12% do total) permanecem
+        ancorados nos primeiros estados (Start.state.gz e pallet_exterior.state)
+        independentemente de quantos marcos existam em progress_states/.
     """
     MAP_PROGRESSION_RANK: dict[tuple[int, int], int] = {
         (3, 19): 1,
@@ -47,6 +50,8 @@ class ProgressManager:
         self._best_flags_ever: int = 0
         self._best_map_rank: int = 0
         self.tier_counts: dict[str, int] = {"frontier": 0, "intermediate": 0, "initial": 0}
+        self.genesis_samples: int = 0
+        self.start_state_samples: int = 0
         self._saved_states: list[str] = [state_file or CFG.state_file]
         if progress_dir is None and os.path.exists(CFG.pallet_exterior_state_file):
             self._saved_states.append(CFG.pallet_exterior_state_file)
@@ -75,6 +80,8 @@ class ProgressManager:
 
         if n == 1:
             self.tier_counts["initial"] += 1
+            self.genesis_samples += 1
+            self.start_state_samples += 1
             return sorted_states[0]
 
         if n == 2:
@@ -84,6 +91,8 @@ class ProgressManager:
                 self.tier_counts["frontier"] += 1
                 return sorted_states[1]
             self.tier_counts["initial"] += 1
+            self.genesis_samples += 1
+            self.start_state_samples += 1
             return sorted_states[0]
 
         n_frontier = max(1, min(3, n // 3))
@@ -100,7 +109,16 @@ class ProgressManager:
             self.tier_counts["intermediate"] += 1
             return chooser.choice(intermediate_states)
         self.tier_counts["initial"] += 1
-        return chooser.choice(initial_states)
+        anchor_k = max(1, min(len(initial_states), CFG.genesis_anchor_count))
+        genesis_states = initial_states[:anchor_k]
+        early_replay_states = initial_states[anchor_k:]
+        if not early_replay_states or chooser.random() < CFG.genesis_anchor_share:
+            picked = chooser.choice(genesis_states)
+            self.genesis_samples += 1
+            if picked == sorted_states[0]:
+                self.start_state_samples += 1
+            return picked
+        return chooser.choice(early_replay_states)
 
     @property
     def current_state_file(self) -> str:
@@ -125,6 +143,10 @@ class ProgressManager:
             "progress/intermediate_samples": self.tier_counts["intermediate"],
             "progress/initial_samples": self.tier_counts["initial"],
             "progress/frontier_ratio": self.tier_counts["frontier"] / max(total, 1),
+            "progress/genesis_samples": self.genesis_samples,
+            "progress/start_state_samples": self.start_state_samples,
+            "progress/genesis_ratio": self.genesis_samples / max(total, 1),
+            "progress/start_state_ratio": self.start_state_samples / max(total, 1),
         }
 
     def check_and_save(self, emulator, total_flags: int, env_id: int) -> float:

@@ -27,6 +27,7 @@ def evaluate(
     num_episodes: int = 3,
     max_eval_steps: int = 250,
     tracking_uri: str = MLFLOW_TRACKING_URI,
+    from_start: bool = False,
 ) -> dict:
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient(tracking_uri)
@@ -44,7 +45,8 @@ def evaluate(
     )
     mlflow.set_experiment(EXPERIMENT_TRAIN)
 
-    venv = DummyVecEnv([lambda: PokemonEnv(env_id=99)])
+    fixed_state = CFG.state_file if from_start else None
+    venv = DummyVecEnv([lambda: PokemonEnv(env_id=99, fixed_state_file=fixed_state)])
     vecnorm_path = CFG.model_path + "_vecnorm.pkl"
     if os.path.exists(vecnorm_path):
         venv = VecNormalize.load(vecnorm_path, venv)
@@ -67,6 +69,10 @@ def evaluate(
     ep_strat_queries: list[int] = []
     ep_strat_rew: list[float] = []
     ep_advisor_repeats: list[int] = []
+    ep_left_bedroom: list[float] = []
+    ep_left_house: list[float] = []
+    ep_entered_lab: list[float] = []
+    ep_got_starter: list[float] = []
 
     t_start = time.time()
     try:
@@ -77,6 +83,8 @@ def evaluate(
             total_rew = 0.0
             steps = 0
             last_info = {}
+            ep_maps_seen: set[tuple[int, int]] = set(raw_env._stats.map_visits)
+            ep_max_lvl: int = int(raw_env._stats.max_level)
 
             for _ in range(max_eval_steps):
                 action_idx, lstm_states = model.predict(
@@ -87,6 +95,9 @@ def evaluate(
                 )
                 obs, rewards, dones, infos = venv.step(action_idx)
                 last_info = infos[0] if infos else {}
+                if "map_bank" in last_info and "map_id" in last_info:
+                    ep_maps_seen.add((int(last_info["map_bank"]), int(last_info["map_id"])))
+                ep_max_lvl = max(ep_max_lvl, int(last_info.get("p1_lvl", 0)))
                 total_rew += float(rewards[0])
                 steps += 1
                 episode_starts[0] = bool(dones[0])
@@ -102,6 +113,7 @@ def evaluate(
                 ep_strat_queries.append(int(em["strategist_queries_count"]))
                 ep_strat_rew.append(float(em["reward_strategist"]))
                 ep_advisor_repeats.append(int(em["advisor_repeat_penalties"]))
+                ep_max_lvl = max(ep_max_lvl, int(em["party_level"]))
                 ep_metrics = {
                     "best_milestone": em["best_milestone"],
                     "badges": em["badges"],
@@ -110,6 +122,8 @@ def evaluate(
                     "maps_visited": em["maps_visited"],
                 }
             else:
+                ep_maps_seen |= raw_env._stats.map_visits
+                ep_max_lvl = max(ep_max_lvl, int(raw_env._stats.max_level))
                 ep_rewards.append(total_rew)
                 ep_steps.append(steps)
                 ep_tiles.append(len(raw_env._stats.tile_visits))
@@ -125,6 +139,10 @@ def evaluate(
                     "maps_visited": len(raw_env._stats.map_visits),
                 }
             ep_scores.append(PokemonCallback._progress_score(ep_metrics))
+            ep_left_bedroom.append(float(any(m != (4, 1) for m in ep_maps_seen)))
+            ep_left_house.append(float((3, 0) in ep_maps_seen or any(b != 4 for b, _ in ep_maps_seen)))
+            ep_entered_lab.append(float((4, 3) in ep_maps_seen))
+            ep_got_starter.append(float(ep_max_lvl > 0))
 
         elapsed = max(time.time() - t_start, 1e-6)
         total_eval_steps = sum(ep_steps)
@@ -143,14 +161,24 @@ def evaluate(
             "progress/score": float(np.mean(ep_scores)),
             "progress/best_flags_ever": float(prog_stats["progress/best_flags_ever"]),
             "progress/frontier_ratio": float(prog_stats["progress/frontier_ratio"]),
+            "progress/genesis_ratio": float(prog_stats["progress/genesis_ratio"]),
+            "progress/start_state_ratio": float(prog_stats["progress/start_state_ratio"]),
             "reward/total": float(np.mean(ep_rewards)),
             "reward/from_strategist": float(np.mean(ep_strat_rew)),
             "strategist/queries_count": float(np.mean(ep_strat_queries)),
         }
+        if from_start:
+            summary.update({
+                "eval/left_bedroom_rate": float(np.mean(ep_left_bedroom)),
+                "eval/left_house_rate": float(np.mean(ep_left_house)),
+                "eval/entered_oaks_lab_rate": float(np.mean(ep_entered_lab)),
+                "eval/got_starter_rate": float(np.mean(ep_got_starter)),
+            })
     finally:
         venv.close()
 
-    with mlflow.start_run(run_name=build_run_name(suffix="eval")):
+    run_suffix = "eval_from_start" if from_start else "eval"
+    with mlflow.start_run(run_name=build_run_name(suffix=run_suffix)):
         params = {
             k: getattr(CFG, k)
             for k in dir(CFG)
@@ -162,6 +190,7 @@ def evaluate(
         mlflow.log_params(params)
         tags = standard_run_tags("eval")
         tags["stage"] = "evaluation"
+        tags["eval_mode"] = "from_start" if from_start else "curriculum"
         tags["surgery_verified"] = "true"
         mlflow.set_tags(tags)
         mlflow.log_metrics(summary, step=int(model.num_timesteps))
@@ -187,5 +216,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate Pokemon FireRed model and log to MLflow")
     parser.add_argument("--episodes", type=int, default=3)
     parser.add_argument("--steps", type=int, default=250)
+    parser.add_argument(
+        "--from-start",
+        action="store_true",
+        help="Avalia retenção de início de jogo a partir de Start.state.gz",
+    )
     args = parser.parse_args()
-    evaluate(num_episodes=args.episodes, max_eval_steps=args.steps)
+    evaluate(num_episodes=args.episodes, max_eval_steps=args.steps, from_start=args.from_start)

@@ -372,3 +372,43 @@ def test_strategist_schema_and_3b_guardrails(monkeypatch):
     assert strat.current_goal.sub_goal != "none"
     assert "Viridian Poke Mart" in strat.current_goal.sub_goal
     strat.close()
+
+
+def test_strategist_early_game_bedroom_house_and_starter_goals():
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+
+    g_bed = strat._heuristic_goal(
+        strat.build_context({"map_bank": 4, "map_id": 1, "p1_lvl": 0}, None, False, 0)
+    )
+    assert (g_bed.target_map_bank, g_bed.target_map_id) == (4, 0)
+    assert g_bed.navigation_hint == "east"
+
+    g_house = strat._heuristic_goal(
+        strat.build_context({"map_bank": 4, "map_id": 0, "p1_lvl": 0}, None, False, 0)
+    )
+    assert (g_house.target_map_bank, g_house.target_map_id) == (3, 0)
+    assert g_house.navigation_hint == "south"
+
+    g_pallet_no_starter = strat._heuristic_goal(
+        strat.build_context({"map_bank": 3, "map_id": 0, "p1_lvl": 0}, None, False, 113)
+    )
+    assert (g_pallet_no_starter.target_map_bank, g_pallet_no_starter.target_map_id) == (4, 3)
+    assert g_pallet_no_starter.navigation_hint == "north"
+
+    g_lab_no_starter = strat._heuristic_goal(
+        strat.build_context({"map_bank": 4, "map_id": 3, "p1_lvl": 0}, None, False, 114)
+    )
+    assert (g_lab_no_starter.target_map_bank, g_lab_no_starter.target_map_id) == (4, 3)
+    assert g_lab_no_starter.navigation_hint == "interact"
+
+    g_lab_with_starter = strat._heuristic_goal(
+        strat.build_context(
+            {"map_bank": 4, "map_id": 3, "p1_lvl": 5, "p1_hp": 20, "p1_maxhp": 20},
+            None,
+            False,
+            116,
+        )
+    )
+    assert (g_lab_with_starter.target_map_bank, g_lab_with_starter.target_map_id) == (3, 0)
+    assert g_lab_with_starter.navigation_hint == "south"
+    strat.close()

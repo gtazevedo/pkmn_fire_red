@@ -365,6 +365,31 @@ class Strategist:
                 navigation_hint="south",
             )
 
+        if (bank, mid) == (4, 1):
+            return StrategicGoal(
+                sub_goal="Go downstairs from Red's bedroom to Red's House 1F",
+                target_map_bank=4,
+                target_map_id=0,
+                priority="explore",
+                navigation_hint="east",
+            )
+        if (bank, mid) == (4, 0):
+            return StrategicGoal(
+                sub_goal="Leave Red's house south into Pallet Town",
+                target_map_bank=3,
+                target_map_id=0,
+                priority="explore",
+                navigation_hint="south",
+            )
+        if (bank, mid) == (4, 3) and party_lvl == 0:
+            return StrategicGoal(
+                sub_goal="Choose your starter Pokemon from the table in Prof. Oak's Lab",
+                target_map_bank=4,
+                target_map_id=3,
+                priority="explore",
+                navigation_hint="interact",
+            )
+
         if bank == 4:
             return StrategicGoal(
                 sub_goal="Exit interior building to overworld",
@@ -377,11 +402,11 @@ class Strategist:
         if bank == 3 and mid == 0:
             if party_lvl == 0:
                 return StrategicGoal(
-                    sub_goal="Enter Prof. Oak's Lab to receive starter",
+                    sub_goal="Walk north toward Route 1 grass so Prof. Oak leads you to his Lab",
                     target_map_bank=4,
                     target_map_id=3,
                     priority="explore",
-                    navigation_hint="east",
+                    navigation_hint="north",
                 )
             return StrategicGoal(
                 sub_goal="Leave Pallet Town north onto Route 1",

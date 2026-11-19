@@ -59,10 +59,12 @@ class Config:
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
 
-    # --- curriculum sampling (Frontier Bias) ---
-    frontier_prob:       float = 0.50
-    intermediate_prob:   float = 0.30
-    initial_prob:        float = 0.20
+    # --- curriculum sampling (Frontier Bias + Genesis Anchor) ---
+    frontier_prob:        float = 0.50
+    intermediate_prob:    float = 0.30
+    initial_prob:         float = 0.20
+    genesis_anchor_share: float = 0.60
+    genesis_anchor_count: int   = 2
 
     # --- strategist & advisor ---
     ollama_url:                  str   = "http://localhost:11434/api/generate"

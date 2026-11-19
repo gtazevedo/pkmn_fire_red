@@ -283,3 +283,40 @@ def test_anti_battle_junkie_fatigue_whiteout_and_level_cap(tmp_path):
     rng = random.Random(99)
     parcel_hits = sum(1 for _ in range(200) if pm.sample_state(rng=rng) == parcel_116)
     assert parcel_hits > 15
+
+
+def test_genesis_anchor_prevents_start_dilution_at_scale(tmp_path):
+    # Simula pool grande com 60 estados avancados alem de Start e pallet_exterior (62 total)
+    for fl in range(112, 172):
+        (tmp_path / f"events_{fl:03d}.state").write_bytes(b"STATE")
+
+    start_path = str(tmp_path / "Start.state.gz")
+    pm = ProgressManager(progress_dir=str(tmp_path), state_file=start_path)
+    pm._saved_states.append("./progress_states/pallet_exterior.state")
+
+    rng = random.Random(2026)
+    n_samples = 10_000
+    genesis_targets = {start_path, "./progress_states/pallet_exterior.state"}
+    genesis_hits = 0
+    start_hits = 0
+    for _ in range(n_samples):
+        picked = pm.sample_state(rng=rng)
+        if picked in genesis_targets:
+            genesis_hits += 1
+        if picked == start_path:
+            start_hits += 1
+
+    stats = pm.stats_dict()
+    frontier_ratio = stats["progress/frontier_samples"] / n_samples
+    intermediate_ratio = stats["progress/intermediate_samples"] / n_samples
+    initial_ratio = stats["progress/initial_samples"] / n_samples
+
+    assert abs(frontier_ratio - CFG.frontier_prob) < 0.03
+    assert abs(intermediate_ratio - CFG.intermediate_prob) < 0.03
+    assert abs(initial_ratio - CFG.initial_prob) < 0.03
+    assert genesis_hits / n_samples >= 0.10
+    assert start_hits / n_samples >= 0.045
+    assert stats["progress/genesis_samples"] == genesis_hits
+    assert stats["progress/start_state_samples"] == start_hits
+    assert abs(stats["progress/genesis_ratio"] - (genesis_hits / n_samples)) < 1e-6
+    assert abs(stats["progress/start_state_ratio"] - (start_hits / n_samples)) < 1e-6

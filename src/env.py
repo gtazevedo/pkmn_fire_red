@@ -1,4 +1,5 @@
 import os
+import re
 import random
 from typing import Optional
 import numpy as np
@@ -22,11 +23,12 @@ class PokemonEnv(gym.Env):
     Gymnasium wrapper around stable-retro PokemonFireRed.
     """
 
-    def __init__(self, env_id: int = 0):
+    def __init__(self, env_id: int = 0, fixed_state_file: Optional[str] = None):
         super().__init__()
         if retro is None:
             raise ImportError("stable-retro é necessário para instanciar PokemonEnv")
         self.env_id = env_id
+        self._fixed_state_file = fixed_state_file
         self.env    = retro.make(game="PokemonFireRed", state=None)
         self._total_steps_ref: list[int] = [0]
         self._cached_total_steps: int    = 0
@@ -255,20 +257,15 @@ class PokemonEnv(gym.Env):
         self._map_history.clear()
         self._last_map_transition_step = 0
 
-        state_file = self._progress.current_state_file
+        state_file = self._fixed_state_file or self._progress.current_state_file
         log.info(f"[Env {self.env_id}] Loading GBA state file: {state_file}")
         with open(state_file, "rb") as f:
             self.env.em.set_state(f.read())
-            
+
         # [FIX v20] Evitar glitch de RAM: Inicializar max_event_sum a partir do nome do arquivo
-        try:
-            basename = os.path.basename(state_file)
-            if "events_" in basename:
-                base_flags = int(basename.replace("events_", "").replace(".state", ""))
-            else:
-                base_flags = 0
-        except ValueError:
-            base_flags = 0
+        basename = os.path.basename(state_file)
+        m_flags = re.match(r"events_(\d+)", basename)
+        base_flags = int(m_flags.group(1)) if m_flags else 0
 
         # [FIX v11-H] Warmup estável: exige 3 leituras consecutivas iguais de level>0
         raw_frame, info = self._warm_up()
@@ -757,6 +754,7 @@ class PokemonEnv(gym.Env):
         if done:
             advisor_stats = self._advisor.stats_dict()
             strategist_stats = self._strategist.stats_dict()
+            prog_stats = self._progress.stats_dict()
             info["episode_metrics"] = {
                 **self._stats.to_dict(ms),
                 **self._rewards.to_dict(),
@@ -774,7 +772,9 @@ class PokemonEnv(gym.Env):
                 "total_tiles_ever":           len(self._stats.persistent_tile_visits),
                 "total_maps_ever":            len(self._stats.all_maps_visited),
                 "best_milestone":             self._progress._best_flags_ever,
-                "frontier_ratio":             self._progress.stats_dict()["progress/frontier_ratio"],
+                "frontier_ratio":             prog_stats["progress/frontier_ratio"],
+                "genesis_ratio":              prog_stats["progress/genesis_ratio"],
+                "start_state_ratio":          prog_stats["progress/start_state_ratio"],
                 "farm_detected":              int(self._stats.farm_detected),
                 "farm_detections":            self._stats.farm_detections,
             }

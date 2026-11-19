@@ -118,7 +118,9 @@ class PokemonCallback(BaseCallback):
         self.logger.record("progress/party_level",     m["party_level"])
         self.logger.record("progress/total_maps_ever", m["total_maps_ever"])
         self.logger.record("progress/total_tiles_ever",m["total_tiles_ever"])
-        self.logger.record("progress/frontier_ratio",  m.get("frontier_ratio", 0.0))
+        self.logger.record("progress/frontier_ratio",    m.get("frontier_ratio", 0.0))
+        self.logger.record("progress/genesis_ratio",     m.get("genesis_ratio", 0.0))
+        self.logger.record("progress/start_state_ratio", m.get("start_state_ratio", 0.0))
 
     def _record_battle(self, m: dict) -> None:
         win_rate = m["victories"] / max(m["battles_fought"], 1)
