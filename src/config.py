@@ -15,15 +15,6 @@ GOAL_SIZE = 6               # Embedding do sub-objetivo estratégico (4 priority
 BATTLE_SIZE = 12            # Embedding de batalha/economia (4 move scores + best + 2 cursores + wild + balls + money + hp + capture)
 
 
-def _default_state_file() -> str:
-    if retro is not None:
-        return os.path.join(
-            os.path.dirname(retro.__file__),
-            "data", "stable", "PokemonFireRed", "Start.state.gz",
-        )
-    return "./progress_states/Start.state.gz"
-
-
 def _default_base_save_dir() -> str:
     env_dir = os.getenv("PKMN_SAVE_DIR")
     if env_dir:
@@ -34,31 +25,44 @@ def _default_base_save_dir() -> str:
     return "./saves"
 
 
+def _default_state_file() -> str:
+    if retro is not None:
+        return os.path.join(
+            os.path.dirname(retro.__file__),
+            "data", "stable", "PokemonFireRed", "Start.state.gz",
+        )
+    return os.path.join(_default_base_save_dir(), "progress_states", "Start.state.gz")
+
+
 @dataclass(frozen=True)
 class Config:
     """Todos os parâmetros tuneáveis em um lugar. Frozen para evitar mutação."""
 
     # --- paths ---
+    # Caminho base configurável via env var, com fallback seguro fora do WSL/Windows (prioriza D:)
+    base_save_dir: str = _default_base_save_dir()
     state_file: str = _default_state_file()
     # [FIX v18] Save state exterior: ponto de partida alternativo já fora da casa
-    pallet_exterior_state_file: str = "./progress_states/pallet_exterior.state"
+    pallet_exterior_state_file: str = f"{base_save_dir}/progress_states/pallet_exterior.state"
     # Probabilidade de iniciar do exterior (quando o state existir)
     exterior_start_ratio: float = 0.60
-    
-    # Caminho base configurável via env var, com fallback seguro fora do WSL/Windows
-    base_save_dir: str = _default_base_save_dir()
+
     model_path:          str = f"{base_save_dir}/pokemon_lstm_model"
     checkpoint_dir:      str = f"{base_save_dir}/checkpoints/"
-    progress_dir:        str = "./progress_states/"
+    progress_dir:        str = f"{base_save_dir}/progress_states/"
     tensorboard_log_dir: str = f"{base_save_dir}/pokemon_tensorboard/"
     log_file:            str = f"{base_save_dir}/pokemon_training.log"
     whiteout_frame_dir:  str = f"{base_save_dir}/whiteout_frames/"
+    screenshot_dir:      str = f"{base_save_dir}/screenshots/"
+    mlflow_dir:          str = f"{base_save_dir}/mlflow"
+    mlflow_db_path:      str = f"{mlflow_dir}/mlflow.db"
+    mlflow_artifact_dir: str = f"{mlflow_dir}/mlruns"
 
     # [FIX v32] Battle IQ (gBattleMons/tipos/cursores) + Captura + Mart + Anti-Flee + Anti-OOM (4 workers)
     config_stamp:        str = "v32_battle_iq_capture_mart"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
-    steps_state_file:    str = "./steps_state.txt"
+    steps_state_file:    str = f"{base_save_dir}/steps_state.txt"
 
     # --- curriculum sampling (Frontier Bias + Genesis Anchor) ---
     frontier_prob:            float = 0.50

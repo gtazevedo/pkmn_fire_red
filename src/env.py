@@ -829,7 +829,7 @@ class PokemonEnv(gym.Env):
         if not _in_battle_now:
             self._battle_screenshot_saved = False
         elif not self._battle_screenshot_saved and float(np.mean(raw_frame)) > 30.0:
-            artifact_dir = "/mnt/c/Users/guilh/.gemini/antigravity/brain/dc565810-e46b-4a70-8005-69b3883d03bc"
+            artifact_dir = CFG.screenshot_dir
             os.makedirs(artifact_dir, exist_ok=True)
             img_path = os.path.join(artifact_dir, f"battle_start_env{self.env_id}.png")
             # raw_frame is RGB, cv2 expects BGR

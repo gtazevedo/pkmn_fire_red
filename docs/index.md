@@ -69,21 +69,20 @@ pkmn_fire_red/
 │   ├── summary.py                  # Resumo CLI de experimentos e versões no Model Registry
 │   ├── tune.py                     # Script auxiliar de sweep (Makefile target `tune`)
 │   └── tune_gen6.py                # Script auxiliar de sweep Gen6
-├── tests/                          # Suíte automatizada (pytest: 50 testes unitários)
+├── tests/                          # Suíte automatizada (pytest: 51 testes unitários)
 │   ├── test_battle.py
 │   ├── test_reader.py
 │   ├── test_progress.py
 │   ├── test_strategist.py
 │   ├── test_surgery.py
 │   └── test_mlflow_tracking.py
-├── progress_states/                # Save states orgânicos do currículo dinâmico (e backups pré-lote)
-├── checkpoints/ / saves base       # Checkpoints locais ou `/mnt/d/projects/pkmn_fire_red_saves`
 ├── research/                       # Scripts de mineração de offsets e referência
 ├── tools/                          # Ferramentas auxiliares legadas e utilitários de save state
 ├── DESIGN_GUIDELINES.md            # Histórico de decisões e lições aprendidas do projeto
 ├── Makefile                        # Atalhos Poetry para train, test, eval, ui, enjoy, clean
-├── pyproject.toml                  # Dependências e configuração do pytest
-└── mlflow.db                       # Banco SQLite local de tracking do MLflow
+└── pyproject.toml                  # Dependências e configuração do pytest
+
+> **Armazenamento de runtime no disco `D:` (`/mnt/d/projects/pkmn_fire_red_saves/`):** `pokemon_lstm_model.zip`, `checkpoints/`, `progress_states/`, `steps_state.txt`, `pokemon_tensorboard/`, `pokemon_training.log`, `ollama.log`, `screenshots/`, `whiteout_frames/` e `mlflow/` (`mlflow.db` + `mlruns/`).
 ```
 
 ---

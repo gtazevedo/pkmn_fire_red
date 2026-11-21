@@ -5,6 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.callbacks import Trainer
 from src.config import CFG
+from src.mlflow_utils import EXPERIMENT_TUNING, MLFLOW_TRACKING_URI
 import mlflow
 
 def run_experiment(name: str, config_updates: dict, steps: int = 300_000):
@@ -37,8 +38,8 @@ def run_experiment(name: str, config_updates: dict, steps: int = 300_000):
     object.__setattr__(CFG, 'config_stamp', f"tune_Gen6_{name}")
     object.__setattr__(CFG, 'lr_total_budget', steps)
     
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    mlflow.set_experiment("Pokemon_RL_Tuning")
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    mlflow.set_experiment(EXPERIMENT_TUNING)
     
     with mlflow.start_run(run_name=f"tune_Gen6_{name}"):
         params = {k: getattr(CFG, k) for k in dir(CFG) if not k.startswith('_') and not callable(getattr(CFG, k))}

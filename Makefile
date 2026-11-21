@@ -14,7 +14,7 @@ enjoy:
 
 # Abre a interface gráfica do MLflow no navegador
 ui:
-	~/.local/bin/poetry run mlflow ui --backend-store-uri sqlite:///mlflow.db -h 127.0.0.1 -p 5000
+	~/.local/bin/poetry run mlflow ui --backend-store-uri sqlite:///$${PKMN_SAVE_DIR:-/mnt/d/projects/pkmn_fire_red_saves}/mlflow/mlflow.db -h 127.0.0.1 -p 5000
 
 # Executa testes unitários
 test:

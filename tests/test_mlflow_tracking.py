@@ -144,3 +144,32 @@ def test_train_main_logs_tags_params_and_finishes_on_keyboard_interrupt(monkeypa
     assert run.data.tags.get("llm_enabled") == "true"
     assert run.data.params.get("config_stamp") == CFG.config_stamp
     assert "RAM_SIZE" in run.data.params
+
+
+def test_all_training_storage_paths_live_under_base_save_dir():
+    import os
+    from src.mlflow_utils import MLFLOW_ARTIFACT_ROOT, MLFLOW_TRACKING_URI
+
+    base = os.path.abspath(CFG.base_save_dir)
+    paths = [
+        CFG.model_path,
+        CFG.checkpoint_dir,
+        CFG.progress_dir,
+        CFG.pallet_exterior_state_file,
+        CFG.tensorboard_log_dir,
+        CFG.log_file,
+        CFG.whiteout_frame_dir,
+        CFG.screenshot_dir,
+        CFG.mlflow_dir,
+        CFG.mlflow_db_path,
+        CFG.mlflow_artifact_dir,
+        CFG.steps_state_file,
+    ]
+    for p in paths:
+        abs_p = os.path.abspath(p)
+        assert abs_p == base or abs_p.startswith(base + os.sep), (
+            f"Path {p!r} -> {abs_p!r} fora de CFG.base_save_dir ({base!r})"
+        )
+
+    assert MLFLOW_TRACKING_URI == f"sqlite:///{os.path.abspath(CFG.mlflow_db_path)}"
+    assert MLFLOW_ARTIFACT_ROOT == os.path.abspath(CFG.mlflow_artifact_dir)

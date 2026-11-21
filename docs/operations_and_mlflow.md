@@ -12,7 +12,7 @@ Guia de uso do projeto no dia a dia, comandos disponíveis, métricas acompanhad
 
 | Variável de Ambiente | Padrão | Finalidade |
 | :--- | :--- | :--- |
-| `PKMN_SAVE_DIR` | `/mnt/d/projects/pkmn_fire_red_saves` (ou `./saves`) | Diretório para modelo `pokemon_lstm_model.zip`, `_vecnorm.pkl`, `.stamp`, checkpoints, TensorBoard e `pokemon_training.log`. |
+| `PKMN_SAVE_DIR` | `/mnt/d/projects/pkmn_fire_red_saves` (ou `./saves`) | Diretório base no `D:` para modelo, `checkpoints/`, `progress_states/`, `steps_state.txt`, `pokemon_tensorboard/`, `pokemon_training.log`, `screenshots/`, `whiteout_frames/` e `mlflow/` (`mlflow.db` + `mlruns/`). |
 | `OLLAMA_MODEL` | `qwen2.5:3b` | Sobrescreve o modelo local utilizado pelo `Strategist`. |
 | `MLFLOW_RUN_NAME` | Automático (`{stamp}_{git}_{model}`) | Define nome explícito para o run no MLflow. |
 | `MLFLOW_RUN_NOTES` | `""` | Registra `mlflow.note.content` com o resumo das mudanças da bateria. |
@@ -33,7 +33,7 @@ make train
 
 ### Subir o Servidor Ollama Local (modo silencioso, quando não estiver ativo)
 ```bash
-OLLAMA_DEBUG=ERROR ~/.local/bin/ollama serve > /tmp/ollama.log 2>&1
+OLLAMA_DEBUG=ERROR ~/.local/bin/ollama serve > /mnt/d/projects/pkmn_fire_red_saves/ollama.log 2>&1
 # Verificar modelo disponível:
 curl -sf http://localhost:11434/api/tags
 ```
@@ -54,15 +54,15 @@ PYTHONPATH=. .venv/bin/python -m scripts.evaluate_mlflow --episodes 5 --steps 20
 PYTHONPATH=. .venv/bin/python scripts/enjoy.py
 # ou: make enjoy
 ```
-Abre uma janela Pygame `720×480` (upscale `3×` do GBA `240×160`) a 60 FPS no melhor marco salvo em `progress_states/`.
+Abre uma janela Pygame `720×480` (upscale `3×` do GBA `240×160`) a 60 FPS no melhor marco salvo em `/mnt/d/projects/pkmn_fire_red_saves/progress_states/`.
 
 ### Consultar Resumo e Interface MLflow / TensorBoard
 ```bash
 # Resumo rápido via terminal:
 PYTHONPATH=. .venv/bin/python -m scripts.summary
 
-# Interface web do MLflow:
-.venv/bin/mlflow ui --backend-store-uri sqlite:///mlflow.db -h 127.0.0.1 -p 5000
+# Interface web do MLflow (banco e artefatos no D:):
+.venv/bin/mlflow ui --backend-store-uri sqlite:////mnt/d/projects/pkmn_fire_red_saves/mlflow/mlflow.db -h 127.0.0.1 -p 5000
 # ou: make ui
 
 # TensorBoard:
@@ -71,7 +71,7 @@ PYTHONPATH=. .venv/bin/python -m scripts.summary
 - Experimento principal no MLflow UI: `http://127.0.0.1:5000/#/experiments/1`
 - Model Registry (`PokemonFireRed-RecurrentPPO`): `http://127.0.0.1:5000/#/models/PokemonFireRed-RecurrentPPO`
 
-### Rodar a Suíte de Testes Unitários (`50` testes)
+### Rodar a Suíte de Testes Unitários (`51` testes)
 ```bash
 PYTHONPATH=. .venv/bin/pytest -v
 # ou: make test
@@ -82,7 +82,7 @@ Cobre:
 - [tests/test_progress.py](../tests/test_progress.py): *Frontier Bias 50/30/20*, *Genesis Anchor*, monotonicidade de flags, `visited_grid`, piso estacionário, fadiga de batalhas, teto de nível, cura anti-farming e imunidade de `steps_on_cur_tile` durante `script_lock`.
 - [tests/test_strategist.py](../tests/test_strategist.py): decodificação TBL do `RamAdvisor`, `YES/NO` contextual (incluindo Mart), *VisionEngine*, schema JSON Ollama, guardrails 3B, anti-border-bounce, Rotas 22–25, guaritas da Viridian Forest `(15, 0)/(15, 2)` e Lab vazio (`0x02B`).
 - [tests/test_surgery.py](../tests/test_surgery.py): preservação exata de saídas e expansão zero-padded da LSTM (`366 → 447 → 459`).
-- [tests/test_mlflow_tracking.py](../tests/test_mlflow_tracking.py): criação de metadados, promoção de `@champion`, `close_orphan_runs` e fluxo de `scripts/train.py`.
+- [tests/test_mlflow_tracking.py](../tests/test_mlflow_tracking.py): criação de metadados, promoção de `@champion`, `close_orphan_runs`, fluxo de `scripts/train.py` e consolidação dos paths sob `CFG.base_save_dir`.
 
 ---
 
@@ -102,5 +102,5 @@ A cada 5 iterações (`~200k` steps) ou na parada limpa, o modelo zip e o `_vecn
 ## 4. Troubleshooting Comum
 
 - **Ollama offline durante o treino:** o `Strategist` registra aviso em `debug`, aplica cooldown de `30s` e utiliza `_heuristic_goal()` localmente sem derrubar nem travar os workers. Se o servidor caiu, suba `ollama serve` e confirme `qwen2.5:3b` via `curl -sf http://localhost:11434/api/tags`.
-- **`Save state` preso ou com HP crítico:** inspecione `progress_states/*.state` verificando `cb2 == 0x080565B5`, `is_script_locked(ram) == False`, movimento livre fora de tiles `TILE_WARP`, `is_oak_in_lab(ram)` em `(4, 3)` e HP `>= 50%`. Backups de estados anteriores ficam em `progress_states/backup_pre_*`.
+- **`Save state` preso ou com HP crítico:** inspecione `/mnt/d/projects/pkmn_fire_red_saves/progress_states/*.state` verificando `cb2 == 0x080565B5`, `is_script_locked(ram) == False`, movimento livre fora de tiles `TILE_WARP`, `is_oak_in_lab(ram)` em `(4, 3)` e HP `>= 50%`. Backups de estados anteriores ficam em `/mnt/d/projects/pkmn_fire_red_saves/progress_states/backup_pre_*`.
 - **Incompatibilidade de checkpoint (`config_stamp`):** alterar o texto de `CFG.config_stamp` sem alterar shapes ou sem caminho na cirurgia faz `Trainer` deletar e reiniciar do zero caso `upgrade_checkpoint_if_needed()` retorne `False`. Para mudanças apenas de recompensa/currículo que preservam o `observation_space`, mantenha o `config_stamp` compatível (ou adicione migração explícita em [src/surgery.py](../src/surgery.py)).

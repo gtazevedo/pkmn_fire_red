@@ -565,7 +565,7 @@ class Trainer:
                     import cv2
                     frames = self._env.get_attr("_last_raw_frame")
                     if frames and frames[0] is not None:
-                        artifact_dir = "/mnt/c/Users/guilh/.gemini/antigravity/brain/dc565810-e46b-4a70-8005-69b3883d03bc"
+                        artifact_dir = CFG.screenshot_dir
                         os.makedirs(artifact_dir, exist_ok=True)
                         img_path = os.path.join(artifact_dir, "checkpoint_latest.png")
                         cv2.imwrite(img_path, cv2.cvtColor(frames[0], cv2.COLOR_RGB2BGR))

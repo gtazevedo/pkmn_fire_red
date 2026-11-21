@@ -9,7 +9,8 @@ from mlflow.tracking import MlflowClient
 
 from src.config import BATTLE_SIZE, CFG, GOAL_SIZE, GRID_SIZE, RAM_SIZE, log
 
-MLFLOW_TRACKING_URI = "sqlite:///mlflow.db"
+MLFLOW_TRACKING_URI = f"sqlite:///{os.path.abspath(CFG.mlflow_db_path)}"
+MLFLOW_ARTIFACT_ROOT = os.path.abspath(CFG.mlflow_artifact_dir)
 EXPERIMENT_TRAIN = "Pokemon_RL_FireRed"
 EXPERIMENT_TUNING = "Pokemon_RL_Tuning"
 REGISTERED_MODEL_NAME = "PokemonFireRed-RecurrentPPO"
@@ -86,11 +87,19 @@ def ensure_experiment_metadata(
     tags: dict[str, str],
 ) -> str:
     """Cria ou recupera o experimento e garante descrição e tags atualizadas."""
+    if client.tracking_uri == MLFLOW_TRACKING_URI:
+        os.makedirs(CFG.mlflow_dir, exist_ok=True)
+        os.makedirs(MLFLOW_ARTIFACT_ROOT, exist_ok=True)
     exp = client.get_experiment_by_name(experiment_name)
     if exp is None:
+        create_kwargs: dict = {
+            "tags": {**tags, "mlflow.note.content": description},
+        }
+        if client.tracking_uri == MLFLOW_TRACKING_URI:
+            create_kwargs["artifact_location"] = MLFLOW_ARTIFACT_ROOT
         exp_id = client.create_experiment(
             experiment_name,
-            tags={**tags, "mlflow.note.content": description},
+            **create_kwargs,
         )
     else:
         exp_id = exp.experiment_id
