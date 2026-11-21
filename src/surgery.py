@@ -11,7 +11,7 @@ from gymnasium import spaces
 from stable_baselines3.common.preprocessing import is_image_space
 from stable_baselines3.common.save_util import load_from_zip_file, save_to_zip_file
 
-from src.config import CFG, GOAL_SIZE, GRID_SIZE, RAM_SIZE, log
+from src.config import BATTLE_SIZE, CFG, GOAL_SIZE, GRID_SIZE, RAM_SIZE, log
 
 
 def build_default_env_obs_space() -> spaces.Dict:
@@ -22,6 +22,7 @@ def build_default_env_obs_space() -> spaces.Dict:
         "collision_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
         "visited_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
         "goal": spaces.Box(0.0, 1.0, (GOAL_SIZE,), dtype=np.float32),
+        "battle": spaces.Box(0.0, 1.0, (BATTLE_SIZE,), dtype=np.float32),
     })
 
 

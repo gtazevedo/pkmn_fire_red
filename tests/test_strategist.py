@@ -607,3 +607,31 @@ def test_strategist_empty_oaks_lab_vs_oak_present():
     assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (4, 3)
     assert strat.current_goal.navigation_hint == "interact"
     strat.close()
+
+
+def test_route2_viridian_forest_gatehouses_and_mart_yes_no():
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+    for src, expected_tgt in [
+        ((3, 20), (15, 0)),
+        ((15, 0), (1, 0)),
+        ((1, 0), (15, 2)),
+        ((15, 2), (3, 20)),
+    ]:
+        ctx = strat.build_context({"map_bank": src[0], "map_id": src[1], "player_y": 70, "p1_lvl": 8}, None, False, 124)
+        g = strat._heuristic_goal(ctx)
+        assert (g.target_map_bank, g.target_map_id) == expected_tgt
+        assert g.navigation_hint == "north"
+
+    ctx_r2_n = strat.build_context({"map_bank": 3, "map_id": 20, "player_y": 20, "p1_lvl": 9}, None, False, 125)
+    g_pewter = strat._heuristic_goal(ctx_r2_n)
+    assert (g_pewter.target_map_bank, g_pewter.target_map_id) == (3, 2)
+    strat.close()
+
+    adv = RamAdvisor()
+    ram_mart = _ram_with_dialogue("POKe BALL, and you want 1. That will be $200. Okay? YES NO")
+    bonus = adv.update(
+        in_battle=False, script_lock=True, action_idx=adv.A_IDX,
+        ram_array=ram_mart, party_level=8, map_key=(5, 3), party_hp_pct=1.0,
+    )
+    assert np.isclose(bonus, adv.YES_NO_BONUS)
+    assert np.isclose(adv.get_embedding()[1], adv.A_IDX / 5.0)

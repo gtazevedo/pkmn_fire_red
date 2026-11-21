@@ -1,6 +1,6 @@
 # Arquitetura do Agente (HRL, PPO Recorrente, Cirurgia e Anti-Memorização)
 
-Este documento descreve como as camadas de decisão funcionam em conjunto no código atual (`config_stamp = "v31_clean_states_visited9x9"`).
+Este documento descreve como as camadas de decisão funcionam em conjunto no código atual (`config_stamp = "v32_battle_iq_capture_mart"`).
 
 ---
 
@@ -19,7 +19,8 @@ O `Strategist` gera um sub-objetivo macro (`StrategicGoal`) convertido em um emb
   4. Mudança na posse da `Oak's Parcel`.
   5. Estagnação no mesmo mapa (`strategist_stagnation_steps = 500`).
 - **Grafo de Kanto e Guardrails para LLM 3B:**
-  - `KANTO_PROGRESSION_GRAPH` e `VALID_KANTO_MAPS` mapeiam a progressão de Kanto (com as **Rotas 21–25 corrigidas**: Route 21 dividida em `(3,39)`/`(3,40)`, Route 22 `(3,41)`, Route 23 `(3,42)`, Route 24 `(3,43)` e Route 25 `(3,44)`).
+  - `KANTO_PROGRESSION_GRAPH` e `VALID_KANTO_MAPS` mapeiam a progressão de Kanto, incluindo as guaritas da Viridian Forest na Route 2 (`(3, 20) → (15, 0) → (1, 0) → (15, 2) → (3, 20)` com `player_y < 45 → (3, 2)` rumo a Pewter) e as **Rotas 21–25 corrigidas** (Route 21 `(3,39)`/`(3,40)`, Route 22 `(3,41)`, Route 23 `(3,42)`, Route 24 `(3,43)` e Route 25 `(3,44)`).
+  - Em Viridian Mart `(5, 3)` e Pewter Mart `(6, 0)` após a Pokédex (sem a Parcel), com `money >= 500` e `potions < 3 or pokeballs < 5`, `_heuristic_goal()` orienta reabastecimento com o atendente (`navigation_hint = "interact"`).
   - Na Route 22 `(3, 41)`, quando `badges < 8`, orienta retornar a leste para Viridian City `(3, 1)` (evitando que o agente fique preso na Route 22 antes dos 8 ginásios); apenas com `badges >= 8` segue a oeste rumo à Route 23 `(3, 42)` e Indigo Plateau `(3, 9)`.
   - `_query_and_apply()` rejeita respostas com `target_map_bank <= 0`, mapas fora de `VALID_KANTO_MAPS`, prioridade `"heal"` indevida quando `hp_pct >= 0.45`, ou desvios fora de batalha que contrariem o mapa-alvo válido do grafo.
   - **Lab vazio vs Prof. Oak presente:** usando `RamReader.is_oak_in_lab()` (`FLAG_HIDE_OAK_IN_HIS_LAB = 0x02B`), entrar no Lab `(4, 3)` com `party_level == 0` enquanto o Prof. Oak ainda não está lá não paga o bônus de alinhamento (`+15.0`), não marca `(4, 3)` como já visitado e orienta o agente a sair ao sul rumo ao mato norte de Pallet.
@@ -38,21 +39,23 @@ A rede neural recebe observações multimodais a cada step (`FRAMES_PER_STEP = 8
 | `5` | `RIGHT` | Direcional Direita |
 | `6` | `TACTICAL_MACRO` | NO-OP no emulador; interceptado pelo ambiente para acionar o *Soldier* |
 
-Durante o **Dynamic Battle Curriculum** (`enable_battle_curriculum=True` e `global_win_rate() < 0.20`), se `was_in_battle` estiver ativo, as teclas direcionais/Start/Select (`UP`, `DOWN`, `LEFT`, `RIGHT`, `START`, `SELECT`) são substituídas por `NO_OP`, focando a política em aprender a navegar o menu de ataque com `A`/`B`.
+Durante o **Dynamic Battle Curriculum** (`enable_battle_curriculum=True` e `global_win_rate() < 0.20`), se `was_in_battle` estiver ativo, `START`/`SELECT` são sempre filtrados, enquanto o D-pad (`UP`, `DOWN`, `LEFT`, `RIGHT`) só é bloqueado quando `best_slot == 0` — liberando a troca direcional de golpe sempre que `score_moves()` identificar um golpe melhor nos slots `1..3`.
 
 ### Camada 3 — Braço Robótico (`Soldier` em [src/env.py](../src/env.py))
 
-Quando o PPO seleciona `TACTICAL_MACRO`, o ambiente executa macros frame-a-frame de acordo com o contexto real da RAM:
+Quando o PPO seleciona `TACTICAL_MACRO`, o ambiente executa macros fechadas via RAM (`_open_battle_bag()` confirma `"what will"` em `gDisplayedStringBattle`, alinha `gActionSelectionCursor == 1` e aguarda fade-in completo de `0x08107EE1` por `45` frames):
 
-- **Poção em batalha (`_run_potion_macro`):** só executa se `_in_battle_now and not _script_lock`, `potions > 0`, `0 < cur_hp < 0.45 * max_hp`, até `max_potion_macro_attempts_per_battle = 2` por batalha e com `potion_macro_cooldown_steps = 12`. Se o número de poções cair ou o HP subir, concede `+100.0`; caso contrário, aplica `wasted_macro_penalty = -0.25`.
-- **Ensino de TM fora de batalha (`_run_tm_macro`):** só executa se `not _in_battle_now and not _script_lock`, `tms > 0` e `< max_tm_macro_attempts_per_episode (2)`. Se o número de TMs cair, concede `+500.0`; se falhar, `-0.25`.
-- Qualquer acionamento de `TACTICAL_MACRO` fora dessas condições aplica imediatamente `-0.25` para eliminar spam.
+- **Poção em batalha (`_run_potion_macro`):** prioridade 1 quando `_in_battle_now and not _script_lock and not _in_scripted_tutorial`, `potions > 0`, `0 < cur_hp < 0.45 * max_hp`, até `max_potion_macro_attempts_per_battle = 2` e `cooldown = 12`. Executa `2× LEFT` para garantir o bolso `ITEMS` (imune à memória de bolso da Gen 3), aguarda o Party Menu (`0x08110000..0x0812FFFF`, `0x0811EBD1 → 0x0811EBA1`) e cura o slot 1 (`+100.0` se poções caírem ou HP subir).
+- **Captura com Pokébola (`_run_pokeball_macro`):** prioridade 2 em batalha selvagem (`not is_trainer_battle`) com `pokeballs > 0`, `0 < enemy_hp < 0.55 * enemy_max_hp`, `party_size < 6` e espécie inimiga inédita (`species not in party_species`), até `2` tentativas/batalha (`cooldown = 12`). Executa `2× RIGHT` para travar no bolso `POKE BALLS` e lança a bola selecionada em `get_pokeball_slot()` (`pokeball_throw_bonus = +15.0`, e `+120.0` se capturar espécie nova).
+- **Compras no Poké Mart (`_run_mart_buy_macro`):** prioridade 3 fora de batalha em `(5, 3)` ou `(6, 0)` com `has_pokedex and not has_parcel`, `money >= 200`, `potions < 2 or pokeballs < 3` (até `2` tentativas/ep). Navega por BFS local até `(4, 3)` ao balcão, abre a loja (`0x0809AE15`/`0x0809ADE5`), confere o texto em RAM (`"poke ball"`, `"potion"`, seletor numérico de 2 dígitos e `"here you are"`) e concede `mart_buy_bonus = +40.0` (1×/ep).
+- **Ensino de TM fora de batalha (`_run_tm_macro`):** prioridade 4 se `not _in_battle_now and not _script_lock`, `tms > 0` e `< max_tm_macro_attempts_per_episode (2)` (`+500.0`).
+- Qualquer acionamento de `TACTICAL_MACRO` fora dessas condições ou que não surta efeito na RAM aplica `wasted_macro_penalty = -0.25`.
 
 ---
 
 ## 2. Espaço de Observação (`PokemonEnv.observation_space`)
 
-O ambiente retorna um `gymnasium.spaces.Dict` com 5 chaves (normalização `VecNormalize` aplicada apenas às recompensas: `norm_obs=False, norm_reward=True, clip_reward=10.0`):
+O ambiente retorna um `gymnasium.spaces.Dict` com 6 chaves (normalização `VecNormalize` aplicada apenas às recompensas: `norm_obs=False, norm_reward=True, clip_reward=10.0`):
 
 ```text
 Dict({
@@ -61,6 +64,7 @@ Dict({
   "collision_grid": Box(0.0, 1.0, (9, 9), float32)      # Mapa local 9x9 de colisão, mato, warps e NPCs
   "visited_grid":   Box(0.0, 1.0, (9, 9), float32)      # Memória espacial local 9x9 de visitas no episódio
   "goal":           Box(0.0, 1.0, (6,), float32)        # Sub-objetivo estratégico do Strategist
+  "battle":         Box(0.0, 1.0, (12,), float32)       # Eficiência de golpes, cursores, economia e captura
 })
 ```
 
@@ -98,13 +102,27 @@ Dict({
 - `[4]`: `clamp(target_map_id, 0, 255) / 255.0`.
 - `[5]`: `NAV_HINTS.index(navigation_hint) / 5.0`, onde `NAV_HINTS = ("none", "north", "south", "east", "west", "interact")`.
 
+### Detalhamento de `"battle"` (`BATTLE_SIZE = 12`)
+
+| Índices | Campo | Normalização | Origem |
+| :---: | :--- | :--- | :--- |
+| `0..3` | Eficiência dos golpes `0..3` (`score_moves`) | `min(power * stab * mult / 150, 1.0)` | `gBattleMons[0/1]` + [src/battle_data.py](../src/battle_data.py) |
+| `4` | Melhor slot de golpe recomendado | `best_slot / 3.0` | `score_moves()` |
+| `5` | Cursor principal (`FIGHT/BAG/PKMN/RUN`) | `main_cur / 3.0` | `gActionSelectionCursor` (`0x02023FF8`) |
+| `6` | Cursor de golpe (`0..3`) | `move_cur / 3.0` | `gMoveSelectionCursor` (`0x02023FFC`) |
+| `7` | Batalha selvagem vs treinador | `float(is_wild)` (`0.0` ou `1.0`) | `gBattleTypeFlags` (`0x02022B4C`) |
+| `8` | Pokébolas na mochila | `min(pokeballs, 20) / 20.0` | `bagPocket_PokeBalls` (XOR `enc_key`) |
+| `9` | Dinheiro disponível | `min(money, 10000) / 10000.0` | `SaveBlock1 + 0x0290` (XOR `encKey32`) |
+| `10` | HP relativo do oponente | `enemy_hp / enemy_max_hp` | `gBattleMons[1]` |
+| `11` | Captura recomendada agora | `{0.0, 1.0}` (`wild & balls>0 & hp<55% & espécie inédita`) | `gBattleMons[1]` + `get_party_species()` |
+
 ---
 
 ## 3. Cirurgia de Pesos (`src/surgery.py`)
 
 Para evoluir o `observation_space` sem descartar dezenas de milhões de steps treinados, `Trainer._load_or_create_model()` em [src/callbacks.py](../src/callbacks.py) aciona automaticamente backup + `upgrade_checkpoint_if_needed()` sempre que o `config_stamp` salvo difere do atual e as chaves antigas são um subconjunto compatível das novas:
 
-1. `compute_key_feature_ranges()` calcula o fatiamento exato do vetor concatenado que entra na LSTM do `CombinedExtractor` (ex.: na transição `v30 → v31` com a inclusão de `visited_grid 9×9`, a entrada da LSTM expandiu de **`366` → `447`** dimensões).
+1. `compute_key_feature_ranges()` calcula o fatiamento exato do vetor concatenado que entra na LSTM do `CombinedExtractor` (ex.: `v30 → v31` expandiu de `366 → 447` com `visited_grid 9×9`; `v31 → v32` expandiu de **`447` → `459`** com `"battle"` de 12 dimensões).
 2. `_expand_lstm_input_tensor()` cria tensores novos inicializados em zero (preservando a resposta inicial exatamente igual ao checkpoint antigo) e copia coluna a coluna para `lstm_actor.weight_ih_l0` e `lstm_critic.weight_ih_l0`.
 3. Os buffers de momento do otimizador Adam (`exp_avg` e `exp_avg_sq`), os buffers internos `_last_obs` / `_last_original_obs` e o arquivo `_vecnorm.pkl` são patchados com as mesmas dimensões.
 
@@ -116,7 +134,7 @@ Para evoluir o `observation_space` sem descartar dezenas de milhões de steps tr
 
 | Parâmetro | Valor Atual (`CFG`) | Observação |
 | :--- | :--- | :--- |
-| `num_cpu` | `6` | Workers paralelos em `SubprocVecEnv` |
+| `num_cpu` | `4` | Workers paralelos em `SubprocVecEnv` (reduzido de `6 → 4` para margem segura anti-OOM no WSL2) |
 | `learn_batch` | `40_000` | Rollout por iteração de treino (salva a cada batch; registra MLflow a cada 5 iters) |
 | `n_steps` / `batch_size` / `n_epochs` | `1024` / `512` / `3` | Estabilização aplicada pós-Batch 9 (reduziu `approx_kl` de `0.054` para `~0.020`) |
 | `gamma` / `gae_lambda` | `0.997` / `0.95` | Horizonte efetivo longo para navegação entre mapas |

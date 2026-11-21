@@ -31,8 +31,11 @@ Todas as parcelas são acumuladas em `RewardAccumulator` para auditoria no MLflo
 | Componente | Valor (`CFG`) | Regras e Guardrails |
 | :--- | :--- | :--- |
 | **First Strike** (`damage`) | `first_strike_bonus = 6.0` × `fatigue` | Pago 1× por batalha no primeiro dano causado ao inimigo. |
+| **Efetividade de Tipo** (`damage`) | `super_effective_bonus = 3.0` × `fatigue` | Bônus adicional sempre que causar dano (`dmg_reward > 0`) usando golpe/matchup super-efetivo (`best_mult >= 2.0`). |
 | **Dano proporcional** (`damage`) | `(dmg / initial_enemy_hp) * 10.0 * fatigue` | Usa `%` de HP removido (`hp_pct_scale = 10.0`), evitando distorção por diferença de HP máximo. |
 | **Near-KO / Vitória** (`victory`) | `near_ko_bonus = 5.0` (`<10%` HP); `victory_bonus = 20.0` × `fatigue` | Ao vencer (`enemy_hp == 0`), ativa `post_battle_grace = 200` steps antes de encerrar por horizonte máximo, dando tempo para receber XP/level-up. |
+| **Captura & Macros Táticas** (`milestone`/`tactical`) | `pokeball_throw_bonus = 15.0`, `capture_new_species_bonus = 120.0`, `mart_buy_bonus = 40.0`, `+100.0` Poção, `+500.0` TM | Captura só remunera espécie inédita no episódio (com `party_size >= 2`) e sincroniza `stats.max_level` antes de `update_level()` para não duplicar bônus de level-up; Mart paga 1×/ep após validar itens e dinheiro em RAM; erros/spam pagam `-0.25`. |
+| **Anti-Fuga** (`idle_pen`) | `flee_trainer_penalty = -1.5`; `unnecessary_flee_penalty = -5.0` | Penaliza `A` sobre o cursor `RUN (3)` em batalha contra treinador e saída/fuga voluntária de batalha selvagem com HP `>= 45%` sem derrota/captura (`_battle_captured_this_battle = False`). |
 | **Fadiga de Batalhas** (`fatigue`) | Por mapa: `1.0 → 0.5 → 0.25 → 0.10` (com Parcel em rota: `0.5 → 0.2 → 0.05`) | Evita grind infinito sem zerar a motivação em encontros necessários. |
 | **Level Up** (`levelup`) | `levelup_weight = 35.0` por nível até `level_cap` (`0.5x` se `in_battle and has_parcel`) | `level_cap = 12 + 8 * badges`. Sem `has_parcel`, paga valor cheio mesmo após múltiplas batalhas na rota para motivar ganho de nível rumo à Viridian Forest e Brock. |
 | **Adversário Máximo** (`op_lvl`) | `max_op_level_reward_scale = 0.2` × `max_enemy_lvl_ever` | Incentiva enfrentar treinadores e áreas mais fortes. |
@@ -61,7 +64,7 @@ Pool ordenado por _progression_key(path) = (stage, parcel_sub, rank, flags + ran
   stage 0: início (Start.state.gz, pallet_exterior.state, events <= 123 sem rank)
   stage 1: pré-entrega e viagem da Parcel (m01..m09)
   stage 2: pós-entrega / Pokédex em Pallet Lab (events_124.state)
-  stage 3: exploração pós-Pokédex (rank >= 10 ou flags >= 125)
+  stage 3: exploração pós-Pokédex (rank >= 10 ou flags >= 125; inclui Viridian Forest (15,0)=14 → (1,0)=15 → (15,2)=16 → Pewter (3,2)=17)
 ```
 
 Quando há `>= 3` estados no pool, cada episódio sorteia o estado inicial conforme:
@@ -78,4 +81,4 @@ Novos `.state` de evento (`check_and_save`) ou marco geográfico (`check_and_sav
 - O centro `grid[4, 4]` não é um tile `TILE_WARP`.
 - `party_level > 0` e `party_hp >= max(1, ceil(party_max_hp * 0.50))` (evita salvar estados moribundos que causam espiral de whiteout).
 
-Entre os 6 workers paralelos, `ProgressManager.sample_state()` chama `_load_best_from_disk(quiet=True)` e o `PokemonCallback` sincroniza `steps_state.txt` para atualizar o horizonte de episódio entre fases (`phase1 < 500k -> 5k`, `phase2 < 2M -> 10k`, `phase3 -> 8k`).
+Entre os 4 workers paralelos (`num_cpu = 4`), `ProgressManager.sample_state()` chama `_load_best_from_disk(quiet=True)` e o `PokemonCallback` sincroniza `steps_state.txt` para atualizar o horizonte de episódio entre fases (`phase1 < 500k -> 5k`, `phase2 < 2M -> 10k`, `phase3 -> 8k`).

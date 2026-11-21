@@ -170,7 +170,14 @@ class RamAdvisor:
                         or any(kw in decoded_text for kw in self.HEAL_YES_NO_KEYWORDS)
                     )
                 )
-                self._yes_no_rec_action = self.A_IDX if (is_starter_prompt or is_heal_prompt) else self.B_IDX
+                is_mart_prompt = (
+                    party_level > 0
+                    and map_key in ((5, 3), (6, 0))
+                    and ("okay?" in decoded_text or "that will be" in decoded_text)
+                )
+                self._yes_no_rec_action = (
+                    self.A_IDX if (is_starter_prompt or is_heal_prompt or is_mart_prompt) else self.B_IDX
+                )
             # Fight Move Selection Screen
             elif "pp " in decoded_text or "pp  " in decoded_text:
                 situation = self.SIT_MOVE_SELECT

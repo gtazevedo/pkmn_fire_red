@@ -31,13 +31,19 @@ Implementado em [src/reader.py](../src/reader.py) (`RamReader`) e complementado 
 
 | Região | Offset | Significado | Detalhes |
 | :--- | :--- | :--- | :--- |
-| **EWRAM** | `0x024284` | `gPlayerParty` (6×100 bytes) | Byte `84` = nível; `u16@86` = HP atual; `u16@88` = HP máx; `u32@80` = status negativo (`Poison`, etc.). |
+| **EWRAM** | `0x024284` | `gPlayerParty` (6×100 bytes) | Byte `84` = nível; `u16@86` = HP atual; `u16@88` = HP máx; `u32@80` = status negativo; `get_party_species()` descriptografa a espécie no bloco Growth (`pid % 24`, XOR `(pid ^ otid) & 0xFFFF`). |
 | **EWRAM** | `0x02402C` | `gEnemyParty` (6×100 bytes) | Lê nível, HP atual e HP máx de cada slot inimigo (validando `0 < maxhp <= 800`). |
+| **EWRAM** | `0x02023BE4` (`0x23BE4`) | `gBattleMons` (2×`0x58` bytes) | Slot `0` (jogador ativo) e `1` (oponente): `species@0x00`, `moves[4]@0x0C`, `type1@0x21`, `type2@0x22`, `pp[4]@0x24`, `hp@0x28`, `level@0x2A`, `max_hp@0x2C`. |
+| **EWRAM** | `0x02022B4C` (`0x22B4C`) | `gBattleTypeFlags` (`u32`) | Bit `0x08` indica batalha contra treinador (`is_trainer_battle()`). |
+| **EWRAM** | `0x02023FF8` / `0x02023FFC` | Cursores de Batalha | `gActionSelectionCursor` (`0=FIGHT, 1=BAG, 2=PKMN, 3=RUN`) e `gMoveSelectionCursor` (`0..3`). |
+| **EWRAM** | `0x0202298C` (`0x2298C`) | `gDisplayedStringBattle` (160 bytes) | Mensagens de combate (`"what will <mon> do?"`), usado por `_open_battle_bag()` e `get_battle_text_slice()`. |
 | **EWRAM** | `0x036E38` | `gObjectEvents` (16×36 bytes) | `flags@0`, `curr_x@16 - 7`, `curr_y@18 - 7`. Ignora slot 0 / flag `0x10000` (player) e invisíveis (`0x2000`). |
-| **EWRAM** | `0x02021D18` (idx `138520`) | Buffer de diálogo (256 bytes) | Texto codificado na tabela Gen 3 TBL lido pelo `RamAdvisor`. |
+| **EWRAM** | `0x02021D18` (idx `138520`) | Buffer de diálogo / loja (256 bytes) | Texto codificado na tabela Gen 3 TBL lido pelo `RamAdvisor` e pelo Poké Mart (`_run_mart_buy_macro`). |
 | **SaveBlock1** | `+0x0000`, `+0x0002` | `(player_x, player_y)` (`s16`) | Corrige leituras espúrias (`21884`) vindas de ponteiros estáticos do `data.json`. |
+| **SaveBlock1** | `+0x0290` | Dinheiro (`u32 XOR encKey32`) | `get_money()` descriptografa com `SaveBlock2 + 0x0F20` (32 bits). |
 | **SaveBlock1** | `+0x03B8` | `bagPocket_KeyItems` (30×4 bytes) | `349` = Oak's Parcel (`has_oaks_parcel`); `366` (`ITEM_TEACHY_TV`) = Teachy TV (`has_teachy_tv`). |
-| **SaveBlock1** | `+0x0310` / `+0x02B8` | `bagPocket_Items` (42×4 bytes) | Quantidade descriptografada com `enc_key` (`SaveBlock2 + 0x0F20`); filtra IDs `13..17` (Poções). |
+| **SaveBlock1** | `+0x0310` / `+0x02B8` | `bagPocket_Items` (42×4 bytes) | Quantidade descriptografada com `enc_key` (`SaveBlock2 + 0x0F20`); IDs `13..17` (Poções, `get_potions_count()` / `get_potion_slot()`). |
+| **SaveBlock1** | `+0x0430` | `bagPocket_PokeBalls` (13×4 bytes) | IDs `1..4` (`POKEBALL_IDS`) via `get_pokeballs_count()` / `get_pokeball_slot()` usando `enc_key`. |
 | **SaveBlock1** | `+0x0464` / `+0x040C` | `bagPocket_TMHM` (58×4 bytes) | Contagem de TMs/HMs na mochila usando `enc_key`. |
 | **SaveBlock1** | `+0x0EE0`..`+0x1000` | *Event Flags* (288 bytes = `2.304` bits) | `event_flags_sum()` soma todos os bits ativos via `byte.bit_count()`. |
 | **SaveBlock1** | `+0x0FE4` | Insígnias (`0x820 >> 3`) | Número de bits ligados de `0..8`. |
@@ -50,7 +56,7 @@ Implementado em [src/reader.py](../src/reader.py) (`RamReader`) e complementado 
 
 Centradas no jogador (posição `[4, 4]` representa o tile atual):
 
-### `collision_grid` ([src/reader.py](../src/reader.py#L397-L470))
+### `collision_grid` ([src/reader.py](../src/reader.py#L628-L699))
 
 Calculada a partir do mapa em `gBackupMapLayout` + margem de borda (`_MAP_BORDER_OFFSET = 7`) + `get_active_npcs()`:
 
@@ -59,12 +65,12 @@ Calculada a partir do mapa em `gBackupMapLayout` + margem de borda (`_MAP_BORDER
 | `0` | `0.00` | `TILE_BLOCKED` | Fora dos limites, `metatile_id == 0x03FF`, ou `collision != 0` que **não** seja porta sólida nem NPC. |
 | `1` | `0.25` | `TILE_WALKABLE` | `collision == 0` e fora de `WARP_METATILES`/`GRASS_METATILES`. |
 | `2` | `0.50` | `TILE_GRASS` | `collision == 0` e `metatile_id in GRASS_METATILES` (`0x008..0x016`). |
-| `3` | `0.75` | `TILE_WARP` | `metatile_id in SOLID_DOOR_METATILES` (`{0x062, 0x2A3, 0x2AC}`) **OU** `(collision == 0 and metatile_id in WARP_METATILES)` (ex.: escada `0x007`, tapetes `0x012..0x03A` e saída do Oak's Lab `0x290..0x292`). |
+| `3` | `0.75` | `TILE_WARP` | `metatile_id in SOLID_DOOR_METATILES` (`{0x062, 0x2A3, 0x2AC}`) **OU** `(collision == 0 and metatile_id in WARP_METATILES)` (ex.: escada `0x007`, tapetes `0x012..0x03A`, `0x191` das guaritas da Viridian Forest e saída do Oak's Lab `0x290..0x292`). |
 | `4` | `1.00` | `TILE_NPC` | `(tx, ty)` ocupado por NPC ativo e visível de `gObjectEvents`. |
 
 > **Por que exigir `collision == 0` para `WARP_METATILES`?** No tileset de Pallet/Viridian, árvores, cercas e água reutilizam IDs numéricos presentes em interiores (`0x01C`, `0x060..0x06A`, etc.), porém com `collision != 0`. Exigir `collision == 0` (exceto para as portas sólidas `SOLID_DOOR_METATILES`) evita que árvores e paredes apareçam falsamente como portas na rede neural.
 
-### `visited_grid` ([src/progress.py](../src/progress.py#L596-L613))
+### `visited_grid` ([src/progress.py](../src/progress.py#L598-L616))
 
 Para cada célula `(tx, ty)` no quadrado `9×9` ao redor do jogador no mapa `(bank, mid)`:
 
@@ -81,7 +87,7 @@ Fornece à política memória imediata dos tiles já explorados no episódio atu
    - `SIT_EXPLORE (1)`, `SIT_DIALOG (2)`, `SIT_BATTLE (3)`, `SIT_YES_NO (4)`, `SIT_LEVEL_UP (5)`, `SIT_HEAL (6)`, `SIT_MOVE_SELECT (7)`.
 3. **`YES/NO` Contextual (`SIT_YES_NO`):**
    - `RamAdvisor.update(...)` recebe `party_level`, `map_key` e `party_hp_pct`.
-   - Recomenda **`A` (`A_IDX`)** quando `party_level == 0 and map_key in ((-1, -1), (4, 3))` (escolher o Pokémon inicial no Laboratório) **OU** quando `party_hp_pct < 0.80` em prompt de cura / Centro Pokémon (`map_key in {(5, 4), (6, 1)}` ou palavras-chave `"rest", "tired", "heal", "restore", "health"`).
+   - Recomenda **`A` (`A_IDX`)** quando `party_level == 0 and map_key in ((-1, -1), (4, 3))` (escolher o Pokémon inicial no Laboratório), quando em confirmação de compra no Poké Mart (`map_key in {(5, 3), (6, 0)}` e `"okay?"` / `"that will be"`) **OU** quando `party_hp_pct < 0.80` em prompt de cura / Centro Pokémon (`map_key in {(5, 4), (6, 1)}` ou palavras-chave `"rest", "tired", "heal", "restore", "health"`).
    - Recomenda **`B` (`B_IDX`)** nos demais casos (evitando loops em perguntas de *nickname* após o time já ter nível `> 0`, PC, salvar jogo ou Centro Pokémon com HP cheio).
 4. **Anti-Exploit de Texto e Anti-Congelamento:**
    - `DIALOG_BONUS = 0.0` (eliminou *farming* de placas).

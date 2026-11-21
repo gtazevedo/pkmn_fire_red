@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover - allows unit testing without retro inst
 RAM_SIZE = 12 + 5 + 3 + 3   # = 23
 GRID_SIZE = 9               # Matriz local 9x9 de colisão e warps
 GOAL_SIZE = 6               # Embedding do sub-objetivo estratégico (4 priority one-hot + map_id + nav_hint)
+BATTLE_SIZE = 12            # Embedding de batalha/economia (4 move scores + best + 2 cursores + wild + balls + money + hp + capture)
 
 
 def _default_state_file() -> str:
@@ -53,8 +54,8 @@ class Config:
     log_file:            str = f"{base_save_dir}/pokemon_training.log"
     whiteout_frame_dir:  str = f"{base_save_dir}/whiteout_frames/"
 
-    # [FIX v31] RAM script_lock real + states higienizados + visited_grid 9x9 + combate/PPO estáveis
-    config_stamp:        str = "v31_clean_states_visited9x9"
+    # [FIX v32] Battle IQ (gBattleMons/tipos/cursores) + Captura + Mart + Anti-Flee + Anti-OOM (4 workers)
+    config_stamp:        str = "v32_battle_iq_capture_mart"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
@@ -76,7 +77,7 @@ class Config:
     dialog_repeat_penalty:       float = -0.001
 
     # --- training ---
-    num_cpu:         int   = 6
+    num_cpu:         int   = 4
     learn_batch:     int   = 40_000
     n_steps:         int   = 1024
     batch_size:      int   = 512
@@ -197,6 +198,15 @@ class Config:
     potion_macro_cooldown_steps:          int   = 12
     max_tm_macro_attempts_per_episode:    int   = 2
     wasted_macro_penalty:                 float = -0.25
+
+    # [FIX v32] Captura, Poké Mart, efetividade de tipos e anti-fuga
+    capture_new_species_bonus:            float = 120.0
+    pokeball_throw_bonus:                 float = 15.0
+    max_capture_macro_attempts_per_battle: int  = 2
+    mart_buy_bonus:                       float = 40.0
+    super_effective_bonus:                float = 3.0
+    flee_trainer_penalty:                 float = -1.5
+    unnecessary_flee_penalty:             float = -5.0
 
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0

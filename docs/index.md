@@ -12,8 +12,9 @@ Projeto de **Aprendizado por Reforço Profundo Hierárquico (HRL)** para jogar *
 | **Percepção RAM (Zero OCR)** | [src/reader.py](../src/reader.py) (`RamReader`) | Lê coordenadas reais, HP/níveis, insígnias, *Event Flags*, inventário XOR-criptografado, textos EWRAM e matriz `9×9` de colisão/warps/NPCs. |
 | **Advisor Tático de Menus** | [src/advisor.py](../src/advisor.py) (`RamAdvisor`) + [src/vision.py](../src/vision.py) (`VisionEngine`) | Decodifica diálogos Gen 3 em microssegundos, classifica 7 situações de jogo, detecta congelamento em texto e fornece `YES/NO` contextual. |
 | **Planejador Estratégico (HRL)** | [src/strategist.py](../src/strategist.py) (`Strategist`) | Roda em `ThreadPoolExecutor` assíncrono com **Ollama local (`qwen2.5:3b`)** + grafo de Kanto e guardrails anti-alucinação, emitindo embedding `goal` (`6` dims). |
-| **Política Neural (General)** | `sb3-contrib` `RecurrentPPO` (`MultiInputLstmPolicy`) + `VecNormalize` | Combina CNN (`84×84×1`), extrator denso (`ram`, `collision_grid`, `visited_grid`, `goal`) e LSTM para decidir entre 7 ações (`Discrete(7)`). |
-| **Braço Robótico (Soldier)** | [src/env.py](../src/env.py) (`_run_potion_macro`, `_run_tm_macro`) | Executa sequências determinísticas de botões no emulador quando a política dispara `TACTICAL_MACRO` em contextos válidos. |
+| **Política Neural (General)** | `sb3-contrib` `RecurrentPPO` (`MultiInputLstmPolicy`) + `VecNormalize` | Combina CNN (`84×84×1`), extrator denso (`ram`, `collision_grid`, `visited_grid`, `goal`, `battle`) e LSTM para decidir entre 7 ações (`Discrete(7)`). |
+| **Braço Robótico (Soldier)** | [src/env.py](../src/env.py) (`_run_potion_macro`, `_run_pokeball_macro`, `_run_mart_buy_macro`, `_run_tm_macro`) | Executa sequências fechadas em RAM (`cb2`, cursores, textos) quando a política dispara `TACTICAL_MACRO` em contextos válidos. |
+| **Inteligência de Combate Gen 3** | [src/battle_data.py](../src/battle_data.py) | Tabela completa de tipos Gen 3, ~120+ golpes (`MOVES_DB`), cálculo de STAB/efetividade (`score_moves`) e suporte à captura. |
 | **Currículo & Recompensas** | [src/progress.py](../src/progress.py) (`ProgressManager`, `EpisodeStats`) | Amostragem **Frontier Bias 50/30/20 + Genesis Anchor**, bônus monotônicos anti-farming e salvamento orgânico em `progress_states/`. |
 | **Governança & Observabilidade** | [src/callbacks.py](../src/callbacks.py) + [src/mlflow_utils.py](../src/mlflow_utils.py) | Rastreamento contínuo em `sqlite:///mlflow.db`, versionamento no Model Registry (`@champion`, `@current`), logs TensorBoard e cirurgia automática ([src/surgery.py](../src/surgery.py)). |
 
@@ -30,7 +31,7 @@ flowchart LR
     Sensors -->|"flags, HP, mapa, Oak 0x02B"| Strategist["Strategist Async (Ollama qwen2.5:3b + Grafo Kanto)"]
     Advisor -->|"obs['ram'] + bonus/pen"| Obs["Observation Dict + RewardAccumulator"]
     Strategist -->|"obs['goal'] + alinhamento"| Obs
-    Sensors -->|"image 84x84, grids 9x9"| Obs
+    Sensors -->|"image 84x84, grids 9x9, battle(12)"| Obs
     Obs -->|"obs, reward, done"| Agent
     Sensors -->|"Novos recordes e marcos"| Progress["ProgressManager (progress_states/)"]
     Obs -->|"Episode Metrics"| MLflow["PokemonCallback + MLflow / TensorBoard"]
@@ -50,8 +51,9 @@ pkmn_fire_red/
 │   └── operations_and_mlflow.md    # Execução, avaliação, testes, MLflow Registry e troubleshooting
 ├── src/
 │   ├── __init__.py                 # Marca pacote Python
-│   ├── config.py                   # Config frozen (CFG), dimensões (RAM/GRID/GOAL) e ActionSpace
-│   ├── reader.py                   # Leitura de IWRAM/EWRAM/SaveBlock1/SaveBlock2 e collision_grid 9x9
+│   ├── config.py                   # Config frozen (CFG), dimensões (RAM/GRID/GOAL/BATTLE) e ActionSpace
+│   ├── battle_data.py              # Tabela de tipos Gen 3, MOVES_DB, type_multiplier e score_moves
+│   ├── reader.py                   # IWRAM/EWRAM/SaveBlock1-2, gBattleMons, economia e collision_grid 9x9
 │   ├── vision.py                   # Classificador CV leve de OVERWORLD, BATTLE, DIALOGUE e WHITEOUT
 │   ├── advisor.py                  # Decodificador Gen 3 (0x02021D18), SIT_*, repeat penalty e YES/NO contextual
 │   ├── strategist.py               # Planejador hierárquico async (Ollama qwen2.5:3b + Kanto graph + guardrails)
@@ -67,7 +69,8 @@ pkmn_fire_red/
 │   ├── summary.py                  # Resumo CLI de experimentos e versões no Model Registry
 │   ├── tune.py                     # Script auxiliar de sweep (Makefile target `tune`)
 │   └── tune_gen6.py                # Script auxiliar de sweep Gen6
-├── tests/                          # Suíte automatizada (pytest: 45 testes unitários)
+├── tests/                          # Suíte automatizada (pytest: 50 testes unitários)
+│   ├── test_battle.py
 │   ├── test_reader.py
 │   ├── test_progress.py
 │   ├── test_strategist.py

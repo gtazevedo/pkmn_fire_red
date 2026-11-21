@@ -6,7 +6,7 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.save_util import load_from_zip_file
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from src.config import CFG, GOAL_SIZE, GRID_SIZE, RAM_SIZE
+from src.config import BATTLE_SIZE, CFG, GOAL_SIZE, GRID_SIZE, RAM_SIZE
 from src.surgery import perform_model_surgery, upgrade_checkpoint_if_needed
 
 
@@ -223,3 +223,82 @@ def test_weight_surgery_v30_to_v31_with_visited_grid(tmp_path):
     assert v31_model.num_timesteps == 32
     v31_venv.close()
     v30_venv.close()
+
+
+def test_weight_surgery_v31_to_v32_with_battle_obs(tmp_path):
+    v31_space = spaces.Dict({
+        "image": spaces.Box(0, 255, (84, 84, 1), dtype=np.uint8),
+        "ram": spaces.Box(0.0, 1.0, (RAM_SIZE,), dtype=np.float32),
+        "collision_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+        "visited_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+        "goal": spaces.Box(0.0, 1.0, (GOAL_SIZE,), dtype=np.float32),
+    })
+    v32_space = spaces.Dict({
+        "image": spaces.Box(0, 255, (84, 84, 1), dtype=np.uint8),
+        "ram": spaces.Box(0.0, 1.0, (RAM_SIZE,), dtype=np.float32),
+        "collision_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+        "visited_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+        "goal": spaces.Box(0.0, 1.0, (GOAL_SIZE,), dtype=np.float32),
+        "battle": spaces.Box(0.0, 1.0, (BATTLE_SIZE,), dtype=np.float32),
+    })
+
+    v31_venv = VecNormalize(DummyVecEnv([lambda: _DummyEnv(v31_space)]), norm_obs=False, norm_reward=True)
+    v31_model = RecurrentPPO(
+        "MultiInputLstmPolicy", v31_venv, n_steps=8, batch_size=8, n_epochs=1, verbose=0, seed=11, device="cpu"
+    )
+    v31_model.learn(total_timesteps=16)
+
+    base = tmp_path / "pokemon_lstm_model"
+    zip_path, vn_path, stamp_path = str(base) + ".zip", str(base) + "_vecnorm.pkl", str(base) + ".stamp"
+    v31_model.save(str(base))
+    v31_venv.save(vn_path)
+    with open(stamp_path, "w") as f:
+        f.write("v31_clean_states_visited9x9")
+
+    rng = np.random.default_rng(5)
+    img = rng.integers(0, 255, size=(1, 84, 84, 1), dtype=np.uint8)
+    ram = rng.random(size=(1, RAM_SIZE), dtype=np.float32)
+    cgrid = rng.random(size=(1, GRID_SIZE, GRID_SIZE), dtype=np.float32)
+    vgrid = rng.random(size=(1, GRID_SIZE, GRID_SIZE), dtype=np.float32)
+    goal = rng.random(size=(1, GOAL_SIZE), dtype=np.float32)
+    states0 = (torch.zeros((1, 1, 256)), torch.zeros((1, 1, 256)))
+    ep0 = torch.ones((1,), dtype=torch.float32)
+
+    with torch.no_grad():
+        obs31, _ = v31_model.policy.obs_to_tensor({
+            "image": np.transpose(img, (0, 3, 1, 2)), "ram": ram,
+            "collision_grid": cgrid, "visited_grid": vgrid, "goal": goal,
+        })
+        dist31, _ = v31_model.policy.get_distribution(obs31, states0, ep0)
+        probs31 = dist31.distribution.probs.clone()
+
+    upgraded = upgrade_checkpoint_if_needed(
+        model_zip_path=zip_path,
+        vecnorm_path=vn_path,
+        stamp_path=stamp_path,
+        target_obs_space=v32_space,
+        target_stamp=CFG.config_stamp,
+    )
+    assert upgraded is True
+    v32_venv = VecNormalize.load(vn_path, DummyVecEnv([lambda: _DummyEnv(v32_space)]))
+    v32_model = RecurrentPPO.load(str(base), env=v32_venv, device="cpu")
+    assert v32_model.policy.lstm_actor.weight_ih_l0.shape == (1024, 459)
+    assert v32_model.policy.lstm_critic.weight_ih_l0.shape == (1024, 459)
+
+    with torch.no_grad():
+        obs32, _ = v32_model.policy.obs_to_tensor({
+            "image": np.transpose(img, (0, 3, 1, 2)),
+            "ram": ram,
+            "collision_grid": cgrid,
+            "visited_grid": vgrid,
+            "goal": goal,
+            "battle": np.zeros((1, BATTLE_SIZE), dtype=np.float32),
+        })
+        dist32, _ = v32_model.policy.get_distribution(obs32, states0, ep0)
+        probs32 = dist32.distribution.probs.clone()
+
+    assert torch.allclose(probs31, probs32, atol=1e-6)
+    v32_model.learn(total_timesteps=16, reset_num_timesteps=False)
+    assert v32_model.num_timesteps == 32
+    v32_venv.close()
+    v31_venv.close()

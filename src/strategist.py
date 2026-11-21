@@ -22,8 +22,10 @@ NAV_HINTS: tuple[str, ...] = ("none", "north", "south", "east", "west", "interac
 # (sub_goal, target_map_bank, target_map_id, priority, navigation_hint)
 KANTO_PROGRESSION_GRAPH: dict[tuple[int, int], tuple[str, int, int, str, str]] = {
     (3, 1):  ("Advance north from Viridian City to Route 2", 3, 20, "explore", "north"),
-    (3, 20): ("Enter Viridian Forest north via Route 2", 1, 0, "explore", "north"),
-    (1, 0):  ("Navigate Viridian Forest north toward Pewter City", 3, 2, "explore", "north"),
+    (3, 20): ("Walk north on Route 2 into Viridian Forest South Gate", 15, 0, "explore", "north"),
+    (15, 0): ("Walk north through Viridian Forest South Gate into Viridian Forest", 1, 0, "explore", "north"),
+    (1, 0):  ("Navigate Viridian Forest north to Viridian Forest North Gate", 15, 2, "explore", "north"),
+    (15, 2): ("Walk north through Viridian Forest North Gate onto Route 2 north", 3, 20, "explore", "north"),
     (3, 2):  ("Challenge Pewter Gym or continue east on Route 3", 3, 21, "battle_gym", "east"),
     (3, 21): ("Cross Route 3 east toward Mt. Moon", 1, 1, "explore", "east"),
     (1, 1):  ("Traverse Mt. Moon exit east to Route 4", 3, 22, "explore", "east"),
@@ -185,6 +187,8 @@ class Strategist:
         has_pokedex = RamReader.has_pokedex(ram_array) if ram_array is not None else False
         oak_in_lab = RamReader.is_oak_in_lab(ram_array) if ram_array is not None else True
         potions = RamReader.get_potions_count(ram_array) if ram_array is not None else 0
+        pokeballs = RamReader.get_pokeballs_count(ram_array) if ram_array is not None else 0
+        money = RamReader.get_money(ram_array) if ram_array is not None else 0
         tms = RamReader.get_tms_count(ram_array) if ram_array is not None else 0
 
         last_dialogue = self._advisor.last_decoded_text.strip() if self._advisor else ""
@@ -205,6 +209,8 @@ class Strategist:
             "has_pokedex": has_pokedex,
             "oak_in_lab": oak_in_lab,
             "potions": potions,
+            "pokeballs": pokeballs,
+            "money": money,
             "tms": tms,
             "in_battle": in_battle,
             "steps_on_map": self._steps_on_current_map,
@@ -236,7 +242,7 @@ class Strategist:
             "- Keep target_map_bank and target_map_id aligned with Kanto maps or the baseline unless low HP or dialogue requires overriding.\n"
             "- Kanto maps (bank,id): Pallet=(3,0), RedHouse=(4,0), OakLab=(4,3), "
             "Route1=(3,19), Viridian=(3,1), ViridianMart=(5,3), ViridianCenter=(5,4), "
-            "Route2=(3,20), ViridianForest=(1,0), Pewter=(3,2), PewterGym=(6,2), Route22=(3,41).\n"
+            "Route2=(3,20), ViridianGateS=(15,0), ViridianForest=(1,0), ViridianGateN=(15,2), Pewter=(3,2), PewterGym=(6,2), Route22=(3,41).\n"
             f"State: map_bank={context['map_bank']}, map_id={context['map_id']}, "
             f"pos=({context['player_x']},{context['player_y']}), "
             f"party_lvl={context['party_level']}, hp_pct={context['party_hp_pct']}, "
@@ -467,6 +473,21 @@ class Strategist:
                 navigation_hint="east",
             )
 
+        if (
+            (bank, mid) in ((5, 3), (6, 0))
+            and not has_parcel
+            and context.get("has_pokedex", False)
+            and context.get("money", 0) >= 500
+            and (context.get("potions", 0) < 3 or context.get("pokeballs", 0) < 5)
+        ):
+            return StrategicGoal(
+                sub_goal="Buy Potions and Poke Balls from the Mart clerk",
+                target_map_bank=bank,
+                target_map_id=mid,
+                priority="explore",
+                navigation_hint="interact",
+            )
+
         if bank == 5:
             return StrategicGoal(
                 sub_goal="Exit Viridian building south to Viridian City",
@@ -483,6 +504,15 @@ class Strategist:
                 target_map_id=2,
                 priority="explore",
                 navigation_hint="south",
+            )
+
+        if (bank, mid) == (3, 20) and context.get("player_y", 79) < 45:
+            return StrategicGoal(
+                sub_goal="Continue north on Route 2 into Pewter City",
+                target_map_bank=3,
+                target_map_id=2,
+                priority="explore",
+                navigation_hint="north",
             )
 
         if (bank, mid) == (3, 41) and context.get("badges", 0) >= 8:
