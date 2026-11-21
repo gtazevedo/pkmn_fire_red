@@ -474,6 +474,22 @@ class Strategist:
             )
 
         if (
+            (bank, mid) == (3, 1)
+            and not has_parcel
+            and context.get("has_pokedex", False)
+            and context.get("badges", 0) == 0
+            and context.get("money", 0) >= 600
+            and context.get("potions", 0) == 0
+        ):
+            return StrategicGoal(
+                sub_goal="Enter Viridian Poke Mart to buy Potions before Route 2",
+                target_map_bank=5,
+                target_map_id=3,
+                priority="explore",
+                navigation_hint="east",
+            )
+
+        if (
             (bank, mid) in ((5, 3), (6, 0))
             and not has_parcel
             and context.get("has_pokedex", False)
@@ -522,6 +538,14 @@ class Strategist:
                 target_map_id=42,
                 priority="explore",
                 navigation_hint="west",
+            )
+        if (bank, mid) == (3, 41) and context.get("badges", 0) < 8 and party_lvl < 12:
+            return StrategicGoal(
+                sub_goal="Train wild Pokemon and return east from Route 22 to Viridian City before fighting Rival",
+                target_map_bank=3,
+                target_map_id=1,
+                priority="explore",
+                navigation_hint="east",
             )
 
         if (bank, mid) in KANTO_PROGRESSION_GRAPH:
@@ -635,7 +659,10 @@ class Strategist:
                 ):
                     goal.navigation_hint = fallback_goal.navigation_hint
 
-                if goal.sub_goal.strip().lower() in ("", "none", "explore", "heal", "battle_gym", "use_hm"):
+                if (
+                    goal.sub_goal.strip().lower() in ("", "none", "explore", "heal", "battle_gym", "use_hm")
+                    or (in_battle and "choose pokemon" in goal.sub_goal.lower())
+                ):
                     goal.sub_goal = fallback_goal.sub_goal
             goal.issued_on_map = issued_on_map
             with self._lock:

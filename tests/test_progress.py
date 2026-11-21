@@ -275,10 +275,21 @@ def test_anti_battle_junkie_fatigue_whiteout_and_level_cap(tmp_path):
     assert CFG.wild_grind_penalty == 0.0
     assert CFG.low_hp_battle_penalty == 0.0
 
-    # Teto de nivel por insignia fora de batalha: lvl 12 paga, lvl 13 sem insignia paga 0, com 1 insignia volta a pagar
-    assert stats.update_level(12, env_id=0, badges=0, in_battle=False) == 3 * CFG.levelup_weight
-    assert stats.update_level(13, env_id=0, badges=0, in_battle=False) == 0.0
-    assert stats.update_level(14, env_id=0, badges=1, in_battle=False) == CFG.levelup_weight
+    # Teto de nivel por insignia fora de batalha: lvl 24 paga, lvl 25 sem insignia paga 0, com 1 insignia volta a pagar
+    stats.max_level = 21
+    assert stats.update_level(24, env_id=0, badges=0, in_battle=False) == 3 * CFG.levelup_weight
+    assert stats.update_level(25, env_id=0, badges=0, in_battle=False) == 0.0
+    assert stats.update_level(26, env_id=0, badges=1, in_battle=False) == CFG.levelup_weight
+
+    # Subnivelado na rota exterior (party_level < 14, badges=0): fadiga abrandada para XP
+    under_stats = EpisodeStats()
+    under_stats.reset({"p1_lvl": 8, "p1_hp": 26, "p1_maxhp": 26})
+    under_fatigue = []
+    for k in range(7):
+        under_stats.update_battle(True, 20, 26, False, None, 0, 1, (3, 19, 5, 5), 8 + (k // 3), badges=0)
+        under_fatigue.append(under_stats.current_battle_fatigue(has_parcel=False, party_level=8 + (k // 3), badges=0))
+        under_stats.update_battle(False, 0, 26, False, None, 0, 1, (3, 19, 5, 5), 8 + (k // 3), badges=0)
+    assert under_fatigue == [1.0, 1.0, 1.0, 1.0, 0.6, 0.6, 0.3]
 
     # Marco geografico com flags menores que o recorde global ainda salva e entra em frontier
     for fl in range(112, 124):

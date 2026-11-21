@@ -141,3 +141,124 @@ def test_reader_economy_pokeballs_party_species_and_battle_obs():
     ram[RamReader._BATTLE_STRING_OFFSET : RamReader._BATTLE_STRING_OFFSET + len(phrase)] = phrase
     assert RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram)) == "what will"
     assert RamReader.get_battle_text_slice(None) == b""
+
+
+def _encode_tbl_bytes(text: str) -> bytes:
+    from src.advisor import RamAdvisor
+    inv = {v: k for k, v in RamAdvisor.CHAR_MAP.items() if isinstance(k, int) and len(v) == 1}
+    return bytes([inv[ch] for ch in text if ch in inv] + [0xFF])
+
+
+def test_trainer_run_blocked_with_script_lock_and_cut_dialogue_zero_bonus(tmp_path):
+    from src.advisor import RamAdvisor
+    from src.config import CFG, ActionSpace
+    from src.env import PokemonEnv
+    from src.progress import EpisodeStats, ProgressManager, RewardAccumulator
+    from src.strategist import Strategist
+    from src.vision import VisionEngine
+
+    # 1. Dialogo "can be cut" nao paga dialogue_advance_bonus
+    adv = RamAdvisor()
+    r1 = _make_full_ram()
+    r2 = _make_full_ram()
+    r1[138520 : 138520 + 10] = _encode_tbl_bytes("hello!")
+    r2[138520 : 138520 + 25] = _encode_tbl_bytes("this tree can be cut!")
+    adv.update(False, True, 0, r1)
+    cut_bonus = adv.update(False, True, 0, r2)
+    assert cut_bonus == 0.0
+
+    # 2. Trainer battle com script_lock=1 bloqueia BAG+DOWN, PKMN+RIGHT e RUN+A
+    ram = _make_full_ram()
+    sb1 = 0x025560
+    struct.pack_into("<iiI", ram, 262144 + 0x5040, 24, 24, 0x02031000)
+    struct.pack_into("<hh", ram, sb1, 10, 10)
+    ram[262144 + 0x0F9C] = 1  # sLockFieldControls = 1 (igual batalha real do Gary!)
+    struct.pack_into("<I", ram, RamReader._BATTLE_TYPE_FLAGS_OFFSET, 0x0C)  # trainer
+    ram[RamReader._PLAYER_PARTY_OFFSET + 84] = 8
+    struct.pack_into("<HH", ram, RamReader._PLAYER_PARTY_OFFSET + 86, 20, 26)
+    ram[RamReader._ENEMY_PARTY_OFFSET + 84] = 9
+    struct.pack_into("<HH", ram, RamReader._ENEMY_PARTY_OFFSET + 86, 26, 26)
+    phrase = _encode_tbl_bytes("what will sodiu do?")
+    ram[RamReader._BATTLE_STRING_OFFSET : RamReader._BATTLE_STRING_OFFSET + len(phrase)] = phrase
+
+    captured_actions = []
+
+    class StubRetroEnv:
+        def get_ram(self):
+            return ram
+
+    env = PokemonEnv.__new__(PokemonEnv)
+    env.env_id = 0
+    env._fixed_state_file = None
+    env._enable_stochasticity = False
+    env.env = StubRetroEnv()
+    env._total_steps_ref = [3_000_000]
+    env._cached_total_steps = 3_000_000
+    env._stats = EpisodeStats()
+    env._stats.reset({"p1_lvl": 8, "p1_hp": 20, "p1_maxhp": 26, "gMain_callback2": 0x08011101})
+    env._stats.was_in_battle = True
+    env._stats.last_enemy_hp = 26
+    env._stats.initial_enemy_hp = 26
+    env._stats.max_enemy_lvl_ever = 9
+    env._rewards = RewardAccumulator()
+    env._advisor = RamAdvisor()
+    env._strategist = Strategist(advisor=env._advisor, async_mode=False)
+    env._strategist._ollama_cooldown_until = 1e18
+    env._progress = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+    env._vision = VisionEngine()
+    env._episode_num = 1
+    env._farm_ratio_threshold = 0.90
+    env._map_history = []
+    env._last_map_transition_step = 0
+    env._explore_reward_per_map = {}
+    env._prev_map_key = (3, 41)
+    env._ever_left_interior = True
+    env._steps_interior_only = 0
+    env._battle_screenshot_saved = True
+    env._had_parcel_in_ep = False
+    env._had_teachy_tv_in_ep = False
+    env._battle_potion_attempts = 0
+    env._battle_potion_cooldown = 0
+    env._battle_capture_attempts = 0
+    env._battle_capture_cooldown = 0
+    env._episode_tm_attempts = 0
+    env._mart_buy_rewarded_in_ep = False
+    env._mart_buy_attempts = 0
+    env._owned_species_in_ep = {1}
+    env._prev_party_size_in_ep = 1
+    env._last_battle_best_slot = 0
+    env._last_battle_best_mult = 1.0
+    env._last_was_trainer_battle = True
+    env._battle_captured_this_battle = False
+    env._last_overworld_tile = ()
+    env._pending_event_save_flags = 0
+    env._steps_in_current_map = 5
+    env._last_overworld_move_action = None
+    env._last_script_lock = True
+
+    def fake_run_action(act):
+        captured_actions.append(np.array(act, copy=True))
+        return np.zeros((160, 240, 3), dtype=np.uint8), np.zeros((84, 84, 1), dtype=np.uint8), {
+            "map_bank": 3, "map_id": 41, "gMain_callback2": 0x08011101,
+            "p1_lvl": 8, "p1_hp": 20, "p1_maxhp": 26, "e1_lvl": 9, "e1_hp": 26, "e1_maxhp": 26,
+        }
+
+    env._run_action = fake_run_action
+
+    # BAG(1) + DOWN -> bloqueado (NO_OP) e penalidade -1.0
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 1
+    _, rew_bag_down, _, _, _ = env.step(ActionSpace.NAMES.index("DOWN"))
+    assert np.all(captured_actions[-1] == ActionSpace.NO_OP)
+    assert np.isclose(rew_bag_down, CFG.time_penalty + CFG.flee_trainer_cursor_penalty)
+
+    # PKMN(2) + RIGHT -> bloqueado (NO_OP) e penalidade -1.0
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 2
+    _, rew_pkmn_right, _, _, _ = env.step(ActionSpace.NAMES.index("RIGHT"))
+    assert np.all(captured_actions[-1] == ActionSpace.NO_OP)
+    assert np.isclose(rew_pkmn_right, CFG.time_penalty + CFG.flee_trainer_cursor_penalty)
+
+    # RUN(3) + A -> bloqueado, convertido em UP e penalidade -5.0 mesmo com script_lock=1
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 3
+    _, rew_run_a, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("UP")))
+    assert np.isclose(rew_run_a, CFG.time_penalty + CFG.flee_trainer_penalty)

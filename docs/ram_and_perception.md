@@ -62,11 +62,11 @@ Calculada a partir do mapa em `gBackupMapLayout` + margem de borda (`_MAP_BORDER
 
 | Valor Bruto | Normalizado (`/ 4.0`) | Constante | Regra de Classificação |
 | :---: | :---: | :--- | :--- |
-| `0` | `0.00` | `TILE_BLOCKED` | Fora dos limites, `metatile_id == 0x03FF`, ou `collision != 0` que **não** seja porta sólida nem NPC. |
+| `0` | `0.00` | `TILE_BLOCKED` | Fora dos limites, `metatile_id == 0x03FF`, obstáculo de HM ativo em `gObjectEvents` (`gfx_id in {95, 96, 97}`: Cut tree, Rock Smash, Strength boulder), ou `collision != 0` que **não** seja porta sólida nem NPC. |
 | `1` | `0.25` | `TILE_WALKABLE` | `collision == 0` e fora de `WARP_METATILES`/`GRASS_METATILES`. |
 | `2` | `0.50` | `TILE_GRASS` | `collision == 0` e `metatile_id in GRASS_METATILES` (`0x008..0x016`). |
 | `3` | `0.75` | `TILE_WARP` | `metatile_id in SOLID_DOOR_METATILES` (`{0x062, 0x2A3, 0x2AC}`) **OU** `(collision == 0 and metatile_id in WARP_METATILES)` (ex.: escada `0x007`, tapetes `0x012..0x03A`, `0x191` das guaritas da Viridian Forest e saída do Oak's Lab `0x290..0x292`). |
-| `4` | `1.00` | `TILE_NPC` | `(tx, ty)` ocupado por NPC ativo e visível de `gObjectEvents`. |
+| `4` | `1.00` | `TILE_NPC` | `(tx, ty)` ocupado por NPC ativo e visível de `gObjectEvents` (excluindo obstáculos HM). |
 
 > **Por que exigir `collision == 0` para `WARP_METATILES`?** No tileset de Pallet/Viridian, árvores, cercas e água reutilizam IDs numéricos presentes em interiores (`0x01C`, `0x060..0x06A`, etc.), porém com `collision != 0`. Exigir `collision == 0` (exceto para as portas sólidas `SOLID_DOOR_METATILES`) evita que árvores e paredes apareçam falsamente como portas na rede neural.
 

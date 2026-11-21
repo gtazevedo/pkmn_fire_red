@@ -209,15 +209,16 @@ class Config:
     max_capture_macro_attempts_per_battle: int  = 2
     mart_buy_bonus:                       float = 40.0
     super_effective_bonus:                float = 3.0
-    flee_trainer_penalty:                 float = -1.5
-    unnecessary_flee_penalty:             float = -5.0
+    flee_trainer_penalty:                 float = -5.0
+    flee_trainer_cursor_penalty:          float = -1.0
+    unnecessary_flee_penalty:             float = -10.0
 
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
     whiteout_entry_cooldown:   int   = 500
-    levelup_weight:       float = 35.0
-    max_rewarded_level_base:      int   = 12
-    max_rewarded_level_per_badge: int   = 8
+    levelup_weight:       float = 60.0
+    max_rewarded_level_base:      int   = 24
+    max_rewarded_level_per_badge: int   = 12
     badge_weight:         float = 100.0
     milestone_weight:     float = 10.0
     parcel_pickup_bonus:   float = 150.0

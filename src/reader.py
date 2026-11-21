@@ -20,6 +20,7 @@ class RamReader:
         0x290, 0x291, 0x292,
     })
     SOLID_DOOR_METATILES = frozenset({0x062, 0x2A3, 0x2AC})
+    HM_OBSTACLE_GFX_IDS = frozenset({95, 96, 97})  # Cuttable Tree (0x5F), Rock Smash (0x60), Strength Boulder (0x61)
     ITEM_TEACHY_TV = 366
     POTION_IDS = (13, 14, 15, 16, 17)
     POKEBALL_IDS = (1, 2, 3, 4)
@@ -580,11 +581,12 @@ class RamReader:
         return cls._clamp(bin(int(raw)).count("1"), 0, 8)
 
     @classmethod
-    def get_active_npcs(cls, ram_array) -> set[tuple[int, int]]:
-        """Lê gObjectEvents (EWRAM 0x02036E38) e retorna coords (x, y) de NPCs ativos."""
+    def get_active_objects(cls, ram_array) -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
+        """Lê gObjectEvents (EWRAM 0x02036E38) separando (npcs, hm_obstacles)."""
         npcs: set[tuple[int, int]] = set()
+        hm_obstacles: set[tuple[int, int]] = set()
         if ram_array is None:
-            return npcs
+            return npcs, hm_obstacles
 
         ram_len = len(ram_array)
         for i in range(cls._OBJECT_EVENTS_COUNT):
@@ -600,8 +602,17 @@ class RamReader:
 
             curr_x = cls._read_s16(ram_array, base + 16) - cls._MAP_BORDER_OFFSET
             curr_y = cls._read_s16(ram_array, base + 18) - cls._MAP_BORDER_OFFSET
-            npcs.add((curr_x, curr_y))
-        return npcs
+            gfx_id = int(ram_array[base + 5])
+            if gfx_id in cls.HM_OBSTACLE_GFX_IDS:
+                hm_obstacles.add((curr_x, curr_y))
+            else:
+                npcs.add((curr_x, curr_y))
+        return npcs, hm_obstacles
+
+    @classmethod
+    def get_active_npcs(cls, ram_array) -> set[tuple[int, int]]:
+        """Lê gObjectEvents (EWRAM 0x02036E38) e retorna coords (x, y) de NPCs ativos."""
+        return cls.get_active_objects(ram_array)[0]
 
     @classmethod
     def get_player_coords(cls, ram_array, info: dict | None = None) -> tuple[int, int]:
@@ -647,7 +658,7 @@ class RamReader:
 
         map_offset = map_ptr & 0x00FFFFFF
         px, py = cls.get_player_coords(ram_array, info)
-        active_npcs = cls.get_active_npcs(ram_array)
+        active_npcs, hm_obstacles = cls.get_active_objects(ram_array)
         radius = grid_size // 2
         ram_len = len(ram_array)
 
@@ -669,7 +680,7 @@ class RamReader:
                 metatile_id = entry & 0x03FF
                 collision = (entry >> 10) & 0x03
 
-                if metatile_id == 0x03FF:
+                if metatile_id == 0x03FF or (tx, ty) in hm_obstacles:
                     tile = cls.TILE_BLOCKED
                 elif (tx, ty) in active_npcs:
                     tile = cls.TILE_NPC

@@ -623,7 +623,12 @@ class EpisodeStats:
             return CFG.stuck_penalty
         return 0.0
 
-    def current_battle_fatigue(self, has_parcel: bool = False) -> float:
+    def current_battle_fatigue(
+        self,
+        has_parcel: bool = False,
+        party_level: int = 99,
+        badges: int = 0,
+    ) -> float:
         n = self.map_battles.get(self.current_battle_map, self.battles_fought)
         is_outdoor_route = bool(self.current_battle_map) and self.current_battle_map[0] == 3
         if is_outdoor_route:
@@ -633,6 +638,12 @@ class EpisodeStats:
                 if n == 2:
                     return 0.2
                 return 0.05
+            if badges == 0 and 0 < party_level < 14:
+                if n <= 4:
+                    return 1.0
+                if n <= 6:
+                    return 0.6
+                return 0.3
             if n <= 1:
                 return 1.0
             if n == 2:
@@ -656,7 +667,8 @@ class EpisodeStats:
                        episode_num: int,
                        current_tile: tuple,
                        party_level: int,
-                       has_parcel: bool = False) -> tuple:
+                       has_parcel: bool = False,
+                       badges: int = 0) -> tuple:
         reward         = 0.0
         idle_pen       = 0.0
         vic_bonus      = 0.0
@@ -687,7 +699,11 @@ class EpisodeStats:
             self.current_battle_damage    = 0
             is_new_battle = True
 
-        fatigue = self.current_battle_fatigue(has_parcel=has_parcel)
+        fatigue = self.current_battle_fatigue(
+            has_parcel=has_parcel,
+            party_level=party_level,
+            badges=badges,
+        )
 
         if in_battle:
             self.battle_steps_total      += 1

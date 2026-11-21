@@ -635,3 +635,64 @@ def test_route2_viridian_forest_gatehouses_and_mart_yes_no():
     )
     assert np.isclose(bonus, adv.YES_NO_BONUS)
     assert np.isclose(adv.get_embedding()[1], adv.A_IDX / 5.0)
+
+
+def test_viridian_mart_restock_route22_underleveled_and_battle_guardrail(monkeypatch):
+    import struct
+
+    enc32 = 0x11223344
+    ram = np.zeros(262144 + 0x6000, dtype=np.uint8)
+    sb1 = 0x025000
+    sb2 = 0x024000
+    struct.pack_into("<I", ram, 262144 + 0x5008, 0x02000000 | sb1)
+    struct.pack_into("<I", ram, 262144 + 0x500C, 0x02000000 | sb2)
+    struct.pack_into("<I", ram, sb2 + 0x0F20, enc32)
+    struct.pack_into("<I", ram, sb1 + 0x0290, 2000 ^ enc32)
+    ram[sb1 + 0x0FE5] = 0x02  # Pokedex ativa
+
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+    # Em Viridian com Pokedex, dinheiro >= 600 e 0 potions -> manda entrar no Mart (5,3)
+    ctx_no_pot = strat.build_context({"map_bank": 3, "map_id": 1, "p1_lvl": 8, "p1_hp": 26, "p1_maxhp": 26}, ram, False, 124)
+    g_mart = strat._heuristic_goal(ctx_no_pot)
+    assert (g_mart.target_map_bank, g_mart.target_map_id) == (5, 3) and g_mart.navigation_hint == "east"
+
+    # Apos comprar 1 Potion -> segue norte para Route 2 (3,20)
+    struct.pack_into("<HH", ram, sb1 + 0x0310, 13, 1 ^ (enc32 & 0xFFFF))
+    ctx_with_pot = strat.build_context({"map_bank": 3, "map_id": 1, "p1_lvl": 8, "p1_hp": 26, "p1_maxhp": 26}, ram, False, 124)
+    g_r2 = strat._heuristic_goal(ctx_with_pot)
+    assert (g_r2.target_map_bank, g_r2.target_map_id) == (3, 20) and g_r2.navigation_hint == "north"
+
+    # Route 22 abaixo do nivel 12 orienta treinar e voltar a Viridian
+    ctx_r22 = strat.build_context({"map_bank": 3, "map_id": 41, "p1_lvl": 8, "p1_hp": 26, "p1_maxhp": 26, "badges": 0}, ram, False, 124)
+    g_r22 = strat._heuristic_goal(ctx_r22)
+    assert (g_r22.target_map_bank, g_r22.target_map_id) == (3, 1)
+    assert "train" in g_r22.sub_goal.lower()
+
+    # Em batalha, "choose pokemon" da 3B é substituido pelo fallback de batalha
+    class FakeResp:
+        def __init__(self, payload: bytes):
+            self._buf = io.BytesIO(payload)
+        def read(self):
+            return self._buf.read()
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=None: FakeResp(
+            json.dumps({
+                "response": json.dumps({
+                    "sub_goal": "choose pokemon",
+                    "target_map_bank": 3,
+                    "target_map_id": 41,
+                    "priority": "explore",
+                    "navigation_hint": "interact",
+                })
+            }).encode("utf-8")
+        ),
+    )
+    strat.update({"map_bank": 3, "map_id": 41, "p1_lvl": 8, "p1_hp": 12, "p1_maxhp": 26}, ram, in_battle=True, total_flags=124)
+    assert strat.current_goal.sub_goal == "Win active Pokemon battle"
+    strat.close()

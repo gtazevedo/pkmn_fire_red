@@ -646,6 +646,22 @@ class PokemonEnv(gym.Env):
         if action_name == "TACTICAL_MACRO":
             action = ActionSpace.NO_OP
 
+        trainer_flee_pen = 0.0
+        if getattr(self._stats, "was_in_battle", False) and action_name != "TACTICAL_MACRO":
+            ram_pre = self.env.get_ram()
+            if ram_pre is not None and RamReader.is_trainer_battle(ram_pre):
+                main_cur_pre, _ = RamReader.get_battle_cursors(ram_pre)
+                bt_pre = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram_pre))
+                if "what will" in bt_pre:
+                    if (main_cur_pre == 1 and action_name == "DOWN") or (
+                        main_cur_pre == 2 and action_name == "RIGHT"
+                    ):
+                        action = ActionSpace.NO_OP
+                        trainer_flee_pen += CFG.flee_trainer_cursor_penalty
+                    elif main_cur_pre == 3 and action_name == "A":
+                        action = ActionSpace.get(ActionSpace.NAMES.index("UP"))
+                        trainer_flee_pen += CFG.flee_trainer_penalty
+
         raw_frame, pooled, info  = self._run_action(action)
         self._last_raw_frame     = raw_frame
 
@@ -713,7 +729,6 @@ class PokemonEnv(gym.Env):
 
             if (
                 _in_battle_now
-                and not _script_lock
                 and not _in_scripted_tutorial
                 and potions > 0
                 and 0 < cur_hp < max_hp * 0.45
@@ -735,7 +750,6 @@ class PokemonEnv(gym.Env):
                 ram_array = ram_after
             elif (
                 _in_battle_now
-                and not _script_lock
                 and not _in_scripted_tutorial
                 and not is_trainer_now
                 and balls > 0
@@ -1099,13 +1113,14 @@ class PokemonEnv(gym.Env):
             _in_battle_now,
             RamReader.enemy_hp(info),
             RamReader.party_hp(info),
-            script_lock=_script_lock,
+            script_lock=(_script_lock and not _in_battle_now),
             last_raw_frame=self._last_raw_frame,
             env_id=self.env_id,
             episode_num=self._episode_num,
             current_tile=tile,
             party_level=RamReader.party_level(info),
             has_parcel=has_parcel_now,
+            badges=RamReader.badges(info),
         )
         step_reward += self._rewards.add("damage", dmg_reward)
 
@@ -1151,21 +1166,31 @@ class PokemonEnv(gym.Env):
                     )
 
         # [FIX v14-B] First Strike Reward (com fadiga por mapa)
-        battle_fatigue = self._stats.current_battle_fatigue(has_parcel=has_parcel_now) if _in_battle_now else 1.0
+        battle_fatigue = (
+            self._stats.current_battle_fatigue(
+                has_parcel=has_parcel_now,
+                party_level=RamReader.party_level(info),
+                badges=RamReader.badges(info),
+            )
+            if _in_battle_now
+            else 1.0
+        )
         if _in_battle_now and self._stats.current_battle_damage > 0 and not getattr(self._stats, 'first_strike_paid', False):
             self._stats.first_strike_paid = True
             actual_first_strike = CFG.first_strike_bonus * battle_fatigue
             step_reward += self._rewards.add("damage", actual_first_strike)
             log.info(f"[Env {self.env_id}] First Strike! +{actual_first_strike:.1f} (fatigue={battle_fatigue:.2f})")
 
-        # [FIX v32] Efetividade de tipo (>=2x super-efetivo) & anti-fuga
+        # [FIX v32] Efetividade de tipo (>=2x super-efetivo) & anti-fuga (funciona com script_lock=1 em treinadores)
         if _in_battle_now and dmg_reward > 0.0 and self._last_battle_best_mult >= 2.0:
             se_bonus = CFG.super_effective_bonus * battle_fatigue
             step_reward += self._rewards.add("damage", se_bonus)
 
-        if _in_battle_now and not _script_lock and RamReader.is_trainer_battle(ram_array):
-            main_cur_now, _ = RamReader.get_battle_cursors(ram_array)
-            if main_cur_now == 3 and action_name == "A":
+        if trainer_flee_pen < 0.0:
+            step_reward += self._rewards.add("idle_pen", trainer_flee_pen)
+        elif _in_battle_now and RamReader.is_trainer_battle(ram_array) and action_name == "A":
+            bt_now = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram_array))
+            if "no running" in bt_now:
                 step_reward += self._rewards.add("idle_pen", CFG.flee_trainer_penalty)
 
         # [FIX v32] Captura de nova espécie + anti-double-count de levelup + anti-fuga desnecessária
@@ -1216,14 +1241,14 @@ class PokemonEnv(gym.Env):
             step_reward += self._rewards.add("text", CFG.battle_sustain_bonus)
 
         # [FIX v11-D] A bonus em batalha escalado pela fadiga por mapa
-        if _in_battle_now and not _script_lock and action_idx == ActionSpace.NAMES.index("A"):
+        if _in_battle_now and action_idx == ActionSpace.NAMES.index("A"):
             self._stats.battle_total_a += 1
             if self._stats.battle_a_presses < CFG.battle_a_cap:
                 self._stats.battle_a_presses += 1
                 step_reward += self._rewards.add("text", CFG.battle_a_bonus * battle_fatigue)
 
         # [FIX v11-B] B penalty só após battle_b_threshold A presses
-        if (_in_battle_now and not _script_lock and
+        if (_in_battle_now and
                 action_idx == ActionSpace.NAMES.index("B") and
                 self._stats.battle_total_a >= CFG.battle_b_threshold):
             step_reward += self._rewards.add("idle_pen", CFG.battle_b_penalty)

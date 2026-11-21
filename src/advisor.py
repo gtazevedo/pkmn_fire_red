@@ -138,6 +138,7 @@ class RamAdvisor:
                         advanced_unseen_dialogue
                         and not in_battle
                         and action_idx in (self.A_IDX, self.B_IDX)
+                        and "can be cut" not in norm_text
                     ):
                         dialogue_progress_reward = CFG.dialogue_advance_bonus
         else:

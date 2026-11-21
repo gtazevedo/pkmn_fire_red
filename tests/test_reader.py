@@ -268,3 +268,32 @@ def test_solid_doors_scripted_tutorial_and_teachy_tv():
     assert RamReader.is_oak_in_lab(ram) is True
     ram[sb1_off + RamReader._HIDE_OAK_LAB_FLAG_OFFSET] |= RamReader._HIDE_OAK_LAB_FLAG_MASK
     assert RamReader.is_oak_in_lab(ram) is False
+
+
+def test_hm_obstacles_map_to_blocked_while_npcs_stay_tile_npc():
+    w, h = 24, 24
+    map_off = 0x031000
+    sb1_off = 0x025000
+    ram = _make_ram(sb1_offset=sb1_off, map_width=w, map_height=h, map_offset=map_off)
+    struct.pack_into("<hh", ram, sb1_off, 5, 5)
+    for gy in range(h):
+        for gx in range(w):
+            struct.pack_into("<H", ram, map_off + 2 * (gy * w + gx), 0x0001)
+
+    # Cuttable tree (gfx=95) em (6,5), Rock Smash (gfx=96) em (4,5), Strength boulder (gfx=97) em (5,4), NPC normal (gfx=18) em (5,6)
+    objs = [(1, 95, 6, 5), (2, 96, 4, 5), (3, 97, 5, 4), (4, 18, 5, 6)]
+    for idx, gfx, tx, ty in objs:
+        base = RamReader._OBJECT_EVENTS_OFFSET + idx * RamReader._OBJECT_EVENT_SIZE
+        struct.pack_into("<I", ram, base, 0x00000001)
+        ram[base + 5] = gfx
+        struct.pack_into("<hh", ram, base + 16, tx + 7, ty + 7)
+
+    npcs, hms = RamReader.get_active_objects(ram)
+    assert npcs == {(5, 6)}
+    assert hms == {(6, 5), (4, 5), (5, 4)}
+
+    grid = RamReader.get_collision_grid(ram)
+    assert grid[4, 5] == RamReader.TILE_BLOCKED  # Cut tree
+    assert grid[4, 3] == RamReader.TILE_BLOCKED  # Rock Smash
+    assert grid[3, 4] == RamReader.TILE_BLOCKED  # Strength boulder
+    assert grid[5, 4] == RamReader.TILE_NPC      # NPC normal preserva TILE_NPC
