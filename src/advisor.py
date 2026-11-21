@@ -26,6 +26,9 @@ class RamAdvisor:
     SIT_HEAL        = 6
     SIT_MOVE_SELECT = 7
 
+    POKECENTER_MAPS = frozenset({(5, 4), (6, 1)})
+    HEAL_YES_NO_KEYWORDS = ("rest", "tired", "heal", "restore", "health")
+
     # Pokémon Gen 3 character decoding table (Hex to ASCII)
     CHAR_MAP = {}
     for code in range(0xBB, 0xD4 + 1):
@@ -66,6 +69,7 @@ class RamAdvisor:
         self.recent_dialogues: list[str] = []
         self.repeat_penalties: int = 0
         self.dialogue_stuck_steps: int = 0
+        self._yes_no_rec_action: int = self.B_IDX
 
     @property
     def last_decoded_text(self) -> str:
@@ -85,9 +89,19 @@ class RamAdvisor:
                 pass
         return "".join(chars).lower()
 
-    def update(self, in_battle: bool, script_lock: bool, action_idx: int, ram_array: np.ndarray = None) -> float:
+    def update(
+        self,
+        in_battle: bool,
+        script_lock: bool,
+        action_idx: int,
+        ram_array: np.ndarray = None,
+        party_level: int = 1,
+        map_key: tuple[int, int] = (-1, -1),
+        party_hp_pct: float = 1.0,
+    ) -> float:
         situation = self.SIT_EXPLORE
         decoded_text = ""
+        self._yes_no_rec_action = self.B_IDX
 
         text_changed = False
         repeat_penalty = 0.0
@@ -148,6 +162,15 @@ class RamAdvisor:
             if ("yes" in decoded_text and "no" in decoded_text) or "would you like" in decoded_text or "do you want to" in decoded_text or "yes/no" in decoded_text:
                 situation = self.SIT_YES_NO
                 self.total_yes_no_steps += 1
+                is_starter_prompt = (party_level == 0 and map_key in ((-1, -1), (4, 3)))
+                is_heal_prompt = (
+                    party_hp_pct < 0.80
+                    and (
+                        map_key in self.POKECENTER_MAPS
+                        or any(kw in decoded_text for kw in self.HEAL_YES_NO_KEYWORDS)
+                    )
+                )
+                self._yes_no_rec_action = self.A_IDX if (is_starter_prompt or is_heal_prompt) else self.B_IDX
             # Fight Move Selection Screen
             elif "pp " in decoded_text or "pp  " in decoded_text:
                 situation = self.SIT_MOVE_SELECT
@@ -197,7 +220,7 @@ class RamAdvisor:
         # A para DIALOG, BATTLE, LEVEL_UP, HEAL, MOVE_SELECT (avançar ou agir)
         # B para YES_NO (negar padrão para evitar travamentos em loops/nicknames)
         if sit == self.SIT_YES_NO:
-            rec = self.B_IDX
+            rec = self._yes_no_rec_action
         elif sit in (self.SIT_DIALOG, self.SIT_BATTLE, self.SIT_LEVEL_UP, self.SIT_HEAL, self.SIT_MOVE_SELECT):
             rec = self.A_IDX
         else:
@@ -229,6 +252,7 @@ class RamAdvisor:
         self.recent_dialogues.clear()
         self.repeat_penalties   = 0
         self.dialogue_stuck_steps = 0
+        self._yes_no_rec_action = self.B_IDX
 
     def stats_dict(self) -> dict:
         return {
@@ -248,7 +272,7 @@ class RamAdvisor:
 
     def _compute_bonus(self, situation: int, action_idx: int, text_changed: bool) -> float:
         if situation == self.SIT_YES_NO:
-            rec_action = self.B_IDX
+            rec_action = self._yes_no_rec_action
             bonus = self.YES_NO_BONUS
         elif situation == self.SIT_LEVEL_UP:
             rec_action = self.A_IDX

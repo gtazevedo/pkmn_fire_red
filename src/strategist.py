@@ -28,9 +28,9 @@ KANTO_PROGRESSION_GRAPH: dict[tuple[int, int], tuple[str, int, int, str, str]] =
     (3, 21): ("Cross Route 3 east toward Mt. Moon", 1, 1, "explore", "east"),
     (1, 1):  ("Traverse Mt. Moon exit east to Route 4", 3, 22, "explore", "east"),
     (3, 22): ("Head east on Route 4 into Cerulean City", 3, 3, "explore", "east"),
-    (3, 3):  ("Explore Cerulean City, Nugget Bridge, and Misty Gym", 3, 42, "battle_gym", "north"),
-    (3, 42): ("Cross Nugget Bridge north toward Route 25", 3, 43, "explore", "east"),
-    (3, 43): ("Visit Bill's Sea Cottage and return south to Cerulean", 3, 3, "explore", "south"),
+    (3, 3):  ("Explore Cerulean City, Nugget Bridge, and Misty Gym", 3, 43, "battle_gym", "north"),
+    (3, 43): ("Cross Nugget Bridge north toward Route 25", 3, 44, "explore", "east"),
+    (3, 44): ("Visit Bill's Sea Cottage and return south to Cerulean", 3, 3, "explore", "south"),
     (3, 23): ("Head south on Route 5 toward Vermilion City", 3, 24, "explore", "south"),
     (3, 24): ("Head south on Route 6 into Vermilion City", 3, 5, "explore", "south"),
     (3, 5):  ("Obtain HM01 Cut on S.S. Anne and challenge Lt. Surge", 3, 27, "use_hm", "north"),
@@ -43,10 +43,22 @@ KANTO_PROGRESSION_GRAPH: dict[tuple[int, int], tuple[str, int, int, str, str]] =
     (3, 10): ("Challenge Sabrina at Saffron Gym and head south", 3, 7, "battle_gym", "south"),
     (3, 7):  ("Obtain HM03 Surf in Safari Zone and challenge Koga", 3, 8, "use_hm", "south"),
     (3, 8):  ("Challenge Blaine on Cinnabar Island and head north", 3, 1, "battle_gym", "north"),
-    (3, 40): ("Take Route 22 west toward Victory Road gate", 3, 41, "explore", "west"),
-    (3, 41): ("Pass badge checks north on Route 23 to Indigo Plateau", 3, 9, "explore", "north"),
+    (3, 39): ("Surf south on Route 21 toward Cinnabar Island", 3, 40, "explore", "south"),
+    (3, 40): ("Surf south on Route 21 to Cinnabar Island", 3, 8, "explore", "south"),
+    (3, 41): ("Return east from Route 22 to Viridian City", 3, 1, "explore", "east"),
+    (3, 42): ("Pass badge checks north on Route 23 to Indigo Plateau", 3, 9, "explore", "north"),
     (3, 9):  ("Challenge the Elite Four at Indigo Plateau", 3, 9, "battle_gym", "north"),
 }
+
+VALID_KANTO_MAPS: frozenset[tuple[int, int]] = frozenset(
+    set(KANTO_PROGRESSION_GRAPH.keys())
+    | {(t_b, t_id) for _, t_b, t_id, _, _ in KANTO_PROGRESSION_GRAPH.values()}
+    | {
+        (3, 0), (4, 0), (4, 1), (4, 2), (4, 3),
+        (5, 0), (5, 1), (5, 2), (5, 3), (5, 4),
+        (6, 0), (6, 1), (6, 2),
+    }
+)
 
 
 @dataclass
@@ -124,6 +136,7 @@ class Strategist:
         self._last_has_parcel: Optional[bool] = None
         self._steps_on_current_map: int = 0
         self._rewarded_targets: set[tuple[int, int]] = set()
+        self._visited_maps_ep: set[tuple[int, int]] = set()
 
         self.queries_count: int = 0
         self.llm_success_count: int = 0
@@ -170,6 +183,7 @@ class Strategist:
 
         has_parcel = RamReader.has_oaks_parcel(ram_array) if ram_array is not None else False
         has_pokedex = RamReader.has_pokedex(ram_array) if ram_array is not None else False
+        oak_in_lab = RamReader.is_oak_in_lab(ram_array) if ram_array is not None else True
         potions = RamReader.get_potions_count(ram_array) if ram_array is not None else 0
         tms = RamReader.get_tms_count(ram_array) if ram_array is not None else 0
 
@@ -189,6 +203,7 @@ class Strategist:
             "event_flags": total_flags,
             "has_oaks_parcel": has_parcel,
             "has_pokedex": has_pokedex,
+            "oak_in_lab": oak_in_lab,
             "potions": potions,
             "tms": tms,
             "in_battle": in_battle,
@@ -221,7 +236,7 @@ class Strategist:
             "- Keep target_map_bank and target_map_id aligned with Kanto maps or the baseline unless low HP or dialogue requires overriding.\n"
             "- Kanto maps (bank,id): Pallet=(3,0), RedHouse=(4,0), OakLab=(4,3), "
             "Route1=(3,19), Viridian=(3,1), ViridianMart=(5,3), ViridianCenter=(5,4), "
-            "Route2=(3,20), ViridianForest=(1,0), Pewter=(3,2), PewterGym=(6,2).\n"
+            "Route2=(3,20), ViridianForest=(1,0), Pewter=(3,2), PewterGym=(6,2), Route22=(3,41).\n"
             f"State: map_bank={context['map_bank']}, map_id={context['map_id']}, "
             f"pos=({context['player_x']},{context['player_y']}), "
             f"party_lvl={context['party_level']}, hp_pct={context['party_hp_pct']}, "
@@ -385,6 +400,14 @@ class Strategist:
                 navigation_hint="south",
             )
         if (bank, mid) == (4, 3) and party_lvl == 0:
+            if not context.get("oak_in_lab", True):
+                return StrategicGoal(
+                    sub_goal="Exit empty Oak's Lab south and walk north to Pallet grass for Prof. Oak",
+                    target_map_bank=3,
+                    target_map_id=0,
+                    priority="explore",
+                    navigation_hint="south",
+                )
             return StrategicGoal(
                 sub_goal="Choose your starter Pokemon from the table in Prof. Oak's Lab",
                 target_map_bank=4,
@@ -442,6 +465,33 @@ class Strategist:
                 target_map_id=3,
                 priority="explore",
                 navigation_hint="east",
+            )
+
+        if bank == 5:
+            return StrategicGoal(
+                sub_goal="Exit Viridian building south to Viridian City",
+                target_map_bank=3,
+                target_map_id=1,
+                priority="explore",
+                navigation_hint="south",
+            )
+
+        if bank == 6 and mid != 2:
+            return StrategicGoal(
+                sub_goal="Exit Pewter building south to Pewter City",
+                target_map_bank=3,
+                target_map_id=2,
+                priority="explore",
+                navigation_hint="south",
+            )
+
+        if (bank, mid) == (3, 41) and context.get("badges", 0) >= 8:
+            return StrategicGoal(
+                sub_goal="Take Route 22 west toward Victory Road gate",
+                target_map_bank=3,
+                target_map_id=42,
+                priority="explore",
+                navigation_hint="west",
             )
 
         if (bank, mid) in KANTO_PROGRESSION_GRAPH:
@@ -509,21 +559,52 @@ class Strategist:
         goal = self._call_ollama(prompt)
         if goal is not None:
             if fallback_goal is not None:
+                if goal.priority == "heal" and hp_pct >= 0.45 and fallback_goal.priority != "heal":
+                    goal.priority = fallback_goal.priority
+
+                goal_target = (goal.target_map_bank, goal.target_map_id)
+                fallback_target = (fallback_goal.target_map_bank, fallback_goal.target_map_id)
+                valid_heal_override = (
+                    goal.priority == "heal"
+                    and hp_pct < 0.35
+                    and goal_target in ((4, 0), (5, 4))
+                )
+
                 if goal.target_map_bank <= 0 and fallback_goal.target_map_bank > 0:
                     goal.target_map_bank = fallback_goal.target_map_bank
                     goal.target_map_id = fallback_goal.target_map_id
-                if (
+                    goal.navigation_hint = fallback_goal.navigation_hint
+                elif goal_target not in VALID_KANTO_MAPS:
+                    goal.target_map_bank = fallback_goal.target_map_bank
+                    goal.target_map_id = fallback_goal.target_map_id
+                    goal.navigation_hint = fallback_goal.navigation_hint
+                elif (
                     not in_battle
-                    and (goal.target_map_bank, goal.target_map_id) == issued_on_map
-                    and (fallback_goal.target_map_bank, fallback_goal.target_map_id) != issued_on_map
+                    and fallback_target != issued_on_map
+                    and goal_target != fallback_target
+                    and not valid_heal_override
+                ):
+                    goal.target_map_bank = fallback_goal.target_map_bank
+                    goal.target_map_id = fallback_goal.target_map_id
+                    goal.navigation_hint = fallback_goal.navigation_hint
+                elif (
+                    not in_battle
+                    and goal_target == issued_on_map
+                    and fallback_target != issued_on_map
                     and "deliver" not in goal.sub_goal.lower()
                 ):
                     goal.target_map_bank = fallback_goal.target_map_bank
                     goal.target_map_id = fallback_goal.target_map_id
                     if goal.navigation_hint == "none":
                         goal.navigation_hint = fallback_goal.navigation_hint
-                if goal.priority == "heal" and hp_pct >= 0.45 and fallback_goal.priority != "heal":
-                    goal.priority = fallback_goal.priority
+
+                if (
+                    (goal.target_map_bank, goal.target_map_id) == fallback_target
+                    and fallback_goal.navigation_hint != "none"
+                    and goal.navigation_hint != fallback_goal.navigation_hint
+                ):
+                    goal.navigation_hint = fallback_goal.navigation_hint
+
                 if goal.sub_goal.strip().lower() in ("", "none", "explore", "heal", "battle_gym", "use_hm"):
                     goal.sub_goal = fallback_goal.sub_goal
             goal.issued_on_map = issued_on_map
@@ -547,6 +628,13 @@ class Strategist:
     ) -> float:
         map_key = (RamReader.map_bank(info), RamReader.map_id(info))
 
+        empty_oak_lab_entry = (
+            map_key == (4, 3)
+            and RamReader.party_level(info) == 0
+            and ram_array is not None
+            and not RamReader.is_oak_in_lab(ram_array)
+        )
+
         alignment_bonus = 0.0
         with self._lock:
             cur_goal = self._current_goal
@@ -555,6 +643,8 @@ class Strategist:
             and map_key != cur_goal.issued_on_map
             and (cur_goal.target_map_bank, cur_goal.target_map_id) == map_key
             and map_key not in self._rewarded_targets
+            and map_key not in self._visited_maps_ep
+            and not empty_oak_lab_entry
         ):
             self._rewarded_targets.add(map_key)
             self.goal_alignments += 1
@@ -564,6 +654,8 @@ class Strategist:
                 f"[Strategist] Goal aligned on map {map_key}! "
                 f"bonus=+{alignment_bonus:.1f} ({cur_goal.sub_goal})"
             )
+        if not empty_oak_lab_entry:
+            self._visited_maps_ep.add(map_key)
 
         if self._last_map_key is None or map_key != self._last_map_key:
             self._steps_on_current_map = 0
@@ -627,6 +719,7 @@ class Strategist:
         self._last_has_parcel = RamReader.has_oaks_parcel(ram_array) if ram_array is not None else None
         self._steps_on_current_map = 0
         self._rewarded_targets.clear()
+        self._visited_maps_ep.clear()
         self.queries_count = 0
         self.llm_success_count = 0
         self.goal_alignments = 0
@@ -635,6 +728,7 @@ class Strategist:
         with self._lock:
             if info is not None:
                 map_key = (RamReader.map_bank(info), RamReader.map_id(info))
+                self._visited_maps_ep.add(map_key)
                 context = self.build_context(info, ram_array, False, self._last_flags)
                 goal = self._heuristic_goal(context)
                 goal.issued_on_map = map_key

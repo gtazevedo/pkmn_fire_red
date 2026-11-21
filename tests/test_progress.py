@@ -228,28 +228,33 @@ def test_anti_battle_junkie_fatigue_whiteout_and_level_cap(tmp_path):
     stats = EpisodeStats()
     stats.reset({"p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24})
 
-    # Rota exterior (3,19) sem Parcel: fadiga 1.0 -> 0.25 -> 0.0 -> 0.0 em dano, near_ko, victory e levelup
+    # Rota exterior (3,19) sem Parcel: fadiga suave 1.0 -> 0.5 -> 0.25 -> 0.10 (nunca zera totalmente)
     observed = []
     for i in range(4):
         stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
         r_dmg, _, r_ko, _, _, _ = stats.update_battle(True, 1, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
         _, _, r_vic, _, _, _ = stats.update_battle(True, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
-        stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
+        if i < 3:
+            stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 7 + i)
         observed.append((stats.current_battle_fatigue(), r_dmg, r_ko, r_vic))
 
-    assert [round(o[0], 2) for o in observed] == [1.0, 0.25, 0.0, 0.0]
-    assert observed[2][1:] == (0.0, 0.0, 0.0)
-    assert observed[3][1:] == (0.0, 0.0, 0.0)
+    assert [round(o[0], 2) for o in observed] == [1.0, 0.5, 0.25, 0.1]
+    assert observed[2][1] > 0.0 and observed[2][3] > 0.0
+    assert observed[3][1] > 0.0 and observed[3][3] > 0.0
 
-    # Em batalha 3+ na rota exterior (fatigue=0.0), update_level(..., in_battle=True) paga 0.0
-    assert stats.update_level(8, env_id=0, badges=0, in_battle=True) == 0.0
+    # Sem Oak's Parcel, level up em batalha paga valor cheio (ate level_cap); com Parcel paga 50%
+    assert stats.update_level(8, env_id=0, badges=0, in_battle=True, has_parcel=False) == CFG.levelup_weight
+    stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 19, 5, 5), 8)
 
-    # Com Oak's Parcel na rota exterior, fadiga eh 0.5 -> 0.0
+    # Com Oak's Parcel na rota exterior, fadiga eh 0.5 -> 0.2 -> 0.05
     stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
     assert stats.current_battle_fatigue(has_parcel=True) == 0.5
     stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
     stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
-    assert stats.current_battle_fatigue(has_parcel=True) == 0.0
+    assert stats.current_battle_fatigue(has_parcel=True) == 0.2
+    stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
+    stats.update_battle(True, 20, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
+    assert stats.current_battle_fatigue(has_parcel=True) == 0.05
     stats.update_battle(False, 0, 24, False, None, 0, 1, (3, 1, 5, 5), 8, has_parcel=True)
 
     # Em ginasio/interior (6,2), fadiga decai 1.0 -> 0.5 -> 0.25 -> 0.1 e nunca zera
@@ -259,17 +264,21 @@ def test_anti_battle_junkie_fatigue_whiteout_and_level_cap(tmp_path):
         gym_fatigue.append(stats.current_battle_fatigue())
         stats.update_battle(False, 0, 24, False, None, 0, 1, (6, 2, 5, 5), 8)
     assert gym_fatigue == [1.0, 0.5, 0.25, 0.1]
-    assert stats.update_level(9, env_id=0, badges=0, in_battle=True) == round(CFG.levelup_weight * 0.1, 6)
+    assert stats.update_level(9, env_id=0, badges=0, in_battle=True, has_parcel=False) == CFG.levelup_weight
+    assert stats.update_level(10, env_id=0, badges=0, in_battle=True, has_parcel=True) == CFG.levelup_weight * 0.5
+    stats.max_level = 9  # restaura baseline 9 para o teste de teto abaixo (12 - 9 = 3)
 
-    # Whiteout aplica penalidade severa (-80.0) com terminate_on_whiteout=True
+    # Whiteout aplica penalidade moderada (-10.0) com terminate_on_whiteout=True e sem punicao em grama selvagem
     _, _, _, _, whiteout_pen, _ = stats.update_battle(True, 20, 0, False, None, 0, 1, (6, 2, 5, 5), 9)
-    assert whiteout_pen == CFG.whiteout_penalty == -80.0
+    assert whiteout_pen == CFG.whiteout_penalty == -10.0
     assert CFG.terminate_on_whiteout is True
+    assert CFG.wild_grind_penalty == 0.0
+    assert CFG.low_hp_battle_penalty == 0.0
 
-    # Teto de nivel por insignia fora de batalha: lvl 10 paga, lvl 11 sem insignia paga 0, com 1 insignia volta a pagar
-    assert stats.update_level(10, env_id=0, badges=0, in_battle=False) == CFG.levelup_weight
-    assert stats.update_level(11, env_id=0, badges=0, in_battle=False) == 0.0
-    assert stats.update_level(12, env_id=0, badges=1, in_battle=False) == CFG.levelup_weight
+    # Teto de nivel por insignia fora de batalha: lvl 12 paga, lvl 13 sem insignia paga 0, com 1 insignia volta a pagar
+    assert stats.update_level(12, env_id=0, badges=0, in_battle=False) == 3 * CFG.levelup_weight
+    assert stats.update_level(13, env_id=0, badges=0, in_battle=False) == 0.0
+    assert stats.update_level(14, env_id=0, badges=1, in_battle=False) == CFG.levelup_weight
 
     # Marco geografico com flags menores que o recorde global ainda salva e entra em frontier
     for fl in range(112, 124):
@@ -355,3 +364,76 @@ def test_post_pokedex_events_124_outranks_pre_delivery_and_saves_route2(tmp_path
     ordered2 = sorted(pm._saved_states, key=pm._progression_key)
     assert ordered2[-1] == r2_file
     assert ordered2[0] == start_path and ordered2[1] == pallet_path
+
+
+def test_visited_grid_stationary_novelty_and_frontier_top_share(tmp_path):
+    import numpy as np
+
+    stats = EpisodeStats()
+    stats.reset({})
+    for _ in range(7):
+        stats.update_exploration((3, 19, 5, 5), (3, 19), include_new_map_bonus=False)
+    for _ in range(2):
+        stats.update_exploration((3, 19, 6, 4), (3, 19), include_new_map_bonus=False)
+
+    vg = stats.get_visited_grid((3, 19), 5, 5, 9)
+    assert vg.shape == (9, 9)
+    assert vg.dtype == np.float32
+    assert np.isclose(vg[4, 4], 1.0)  # clampado em 5/5
+    assert np.isclose(vg[3, 5], 0.4)  # (6,4) com 2 visitas
+    assert np.isclose(vg[0, 0], 0.0)
+
+    # Piso estacionario: mesmo apos 1000 visitas historicas, tile novo no episodio mantem floor >= 50%
+    stats.persistent_tile_visits[(3, 19, 9, 9)] = 1000
+    stats.reset({})
+    rew_floor, _ = stats.update_exploration((3, 19, 9, 9), (3, 19), include_new_map_bonus=False)
+    expected_min = (CFG.explore_weight + CFG.explore_weight_outdoor_bonus) * CFG.explore_novelty_floor
+    assert rew_floor >= expected_min - 1e-6
+
+    # Frontier top state share: events_124.state recebe ~50% de frontier_prob (~25% do total)
+    for fl in [116, 120, 121, 124]:
+        (tmp_path / f"events_{fl:03d}.state").write_bytes(b"S")
+    (tmp_path / "events_121_m08_3_0.state").write_bytes(b"S")
+    (tmp_path / "events_121_m09_4_3.state").write_bytes(b"S")
+    pm = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+    rng = random.Random(101)
+    top_path = str(tmp_path / "events_124.state")
+    hits_top = sum(1 for _ in range(2000) if pm.sample_state(rng=rng) == top_path)
+    assert 420 <= hits_top <= 580
+
+
+def test_heal_reward_anti_farming_prior_low_hp_guard():
+    stats = EpisodeStats()
+    stats.reset({"p1_lvl": 8, "p1_hp": 20, "p1_maxhp": 26})
+
+    # HP previo >= 40% (20/26 = 76.9%) NAO pode recompensar cura no Centro Pokemon
+    assert stats.update_heal_reward({"p1_hp": 26, "p1_maxhp": 26}) == 0.0
+
+    # HP previo < 40% (7/26 = 26.9%), ganho pequeno (<3 HP, ex levelup bump) tambem nao recompensa
+    stats.last_party_hp = 7
+    assert stats.update_heal_reward({"p1_hp": 9, "p1_maxhp": 26}) == 0.0
+
+    # HP previo < 40% (7/26) e cura real para 26/26 recompensa proporcionalmente
+    rew = stats.update_heal_reward({"p1_hp": 26, "p1_maxhp": 26})
+    expected = ((26 - 7) / 26.0) * CFG.heal_reward_scale
+    assert abs(rew - expected) < 1e-6
+
+
+def test_cutscene_script_lock_prevents_false_stuck_and_antimem_config():
+    stats = EpisodeStats()
+    stats.reset({"map_bank": 4, "map_id": 3, "player_x": 6, "player_y": 4})
+
+    # 200 steps parado no mesmo tile durante cutscene (script_lock=True) nao acumulam stuck
+    for _ in range(200):
+        stats.update_exploration((4, 3, 6, 4), (4, 3), include_new_map_bonus=False, script_lock=True)
+    assert stats.steps_on_cur_tile == 0
+
+    # Assim que script_lock=False, volta a incrementar normalmente
+    stats.update_exploration((4, 3, 6, 4), (4, 3), include_new_map_bonus=False, script_lock=False)
+    stats.update_exploration((4, 3, 6, 4), (4, 3), include_new_map_bonus=False, script_lock=False)
+    assert stats.steps_on_cur_tile == 2
+
+    assert 0.0 < CFG.sticky_action_prob <= 0.25
+    assert CFG.reset_random_noop_max > 0
+    assert CFG.reset_random_walk_max > 0
+    assert 0.0 < CFG.coord_dropout_prob <= 0.5

@@ -53,40 +53,42 @@ class Config:
     log_file:            str = f"{base_save_dir}/pokemon_training.log"
     whiteout_frame_dir:  str = f"{base_save_dir}/whiteout_frames/"
 
-    # [FIX v30] Strategist + Frontier Bias + Matriz de Colisão 9x9 (weight surgery compatível)
-    config_stamp:        str = "v30_hrl_strategist_grid9x9"
+    # [FIX v31] RAM script_lock real + states higienizados + visited_grid 9x9 + combate/PPO estáveis
+    config_stamp:        str = "v31_clean_states_visited9x9"
 
     # [FIX 16] steps_state_file para sincronização de currículo entre workers
     steps_state_file:    str = "./steps_state.txt"
 
     # --- curriculum sampling (Frontier Bias + Genesis Anchor) ---
-    frontier_prob:        float = 0.50
-    intermediate_prob:    float = 0.30
-    initial_prob:         float = 0.20
-    genesis_anchor_share: float = 0.60
-    genesis_anchor_count: int   = 2
+    frontier_prob:            float = 0.50
+    frontier_top_state_share: float = 0.50
+    intermediate_prob:        float = 0.30
+    initial_prob:             float = 0.20
+    genesis_anchor_share:     float = 0.60
+    genesis_anchor_count:     int   = 2
 
     # --- strategist & advisor ---
     ollama_url:                  str   = "http://localhost:11434/api/generate"
     ollama_model:                str   = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
     ollama_timeout_sec:          float = 15.0
     strategist_stagnation_steps: int   = 500
-    strategist_goal_bonus:       float = 30.0
+    strategist_goal_bonus:       float = 15.0
     dialog_repeat_penalty:       float = -0.001
 
     # --- training ---
     num_cpu:         int   = 6
     learn_batch:     int   = 40_000
     n_steps:         int   = 1024
-    batch_size:      int   = 256
-    n_epochs:        int   = 4
+    batch_size:      int   = 512
+    n_epochs:        int   = 3
     gamma:           float = 0.997
     gae_lambda:      float = 0.95
-    # [FIX v15 / v30b] ent_coef 0.08→0.02: permite sequências de batalha FIGHT→ataque
-    ent_coef:        float = 0.02
-    lr_start:        float = 1e-4
-    lr_end:          float = 1e-4
+    # [FIX v15 / v31] ent_coef 0.018 (Whiddy v2=0.01) + target_kl=0.025 + batch=512
+    ent_coef:        float = 0.018
+    lr_start:        float = 6e-5
+    lr_end:          float = 3e-5
     lr_total_budget: int   = 50_000_000
+    target_kl:       float = 0.025
     checkpoint_freq: int   = 10_000
     log_freq_steps:  int   = 500
 
@@ -107,40 +109,45 @@ class Config:
     pool_start:  int = 4
     pool_end:    int = 8
 
+    # --- anti-memorization (Machado sticky actions + reset jitter + coord dropout) ---
+    sticky_action_prob:    float = 0.08
+    reset_random_noop_max: int   = 15
+    reset_random_walk_max: int   = 3
+    coord_dropout_prob:    float = 0.15
+
     # --- reward weights ---
     # [FIX v18.3] Remoção do medo do tempo (Whiddy-style).
     # Como não perdemos mais tempo passivamente, o limite de passos cuida da inércia.
     # [FIX v18.4] Reativado levemente o time_penalty para causar inércia desconfortável e forçar movimento
     # [FIX v24 / v30b] Zerado o time_penalty (Whiddy-Pure)
     time_penalty:    float = 0.0
-    # [FIX v26] Whiddy-Pure: explore_weight é a ÚNICA fonte primária de dopamina
-    explore_weight:  float = 3.0
-    # [FIX v27] Bônus extra por tile novo em mapas exteriores (bank=3, routes)
-    # Torna o exterior ~50% mais lucrativo que o interior sem punir estar dentro.
-    explore_weight_outdoor_bonus: float = 5.0
+    # [FIX v26 / v31] Exploração estacionária com piso de novidade >= 0.50
+    explore_weight:  float = 1.5
+    explore_weight_outdoor_bonus: float = 2.0
+    explore_novelty_floor:        float = 0.50
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
     max_op_level_reward_scale: float = 0.2
-    heal_reward_scale:         float = 8.0
+    heal_reward_scale:         float = 25.0
+    heal_min_prior_hp_ratio:   float = 0.40
     # Quando o agente esgotar os tiles do mapa, ele ganha uma punição de tempo leve
     max_explore_reward_per_map: float = 150.0
     stale_map_penalty:          float = 0.0
 
-    # [FIX v26] Whiddy-Pure: zerado new_map_bonus (causava exploit de +60 grátis no spawn)
-    new_map_bonus:        float = 50.0
-    new_map_bonus_route:  float = 100.0
+    # [FIX v31] Reduzido para evitar exploit de oscilar na borda entre mapas
+    new_map_bonus:        float = 5.0
+    new_map_bonus_route:  float = 15.0
 
     # [FIX v15] battle_idle_penalty: -0.05 → -0.01, grace: 120 → 200
     # Punições muito altas geravam fobia de batalhas e colapso na grama.
     battle_idle_penalty:  float = 0.0
     battle_idle_grace:    int   = 200   # mais carência para lidar com menus e gary
 
-    # [FIX v11-C] Novo sistema de reward de dano baseado em HP%
-    hp_pct_scale:         float = 6.0
+    # [FIX v11-C / v31] Recompensas de combate reforçadas para vencer batalhas sem fobia
+    hp_pct_scale:         float = 10.0
     damage_weight:        float = 0.05  # fallback
 
-    # Recompensas enxutas para impedir battle-junkie farming em rotas
-    victory_bonus:        float = 15.0
+    victory_bonus:        float = 20.0
     near_ko_bonus:        float = 5.0
     post_battle_grace:    int   = 200
 
@@ -162,12 +169,12 @@ class Config:
     battle_b_penalty:     float = 0.0
     battle_b_threshold:   int   = 999  # Disable b penalty
     
-    # Penalidade severa de whiteout + término imediato + taxas anti-grind selvagem
-    whiteout_penalty:          float = -80.0
+    # [FIX v31] Whiteout moderado (sem fobia de combate) + zero punição em encontro selvagem
+    whiteout_penalty:          float = -10.0
     whiteout_idle_multiplier:  float = 0.0
     terminate_on_whiteout:     bool  = True
-    wild_grind_penalty:        float = -15.0
-    low_hp_battle_penalty:     float = -15.0
+    wild_grind_penalty:        float = 0.0
+    low_hp_battle_penalty:     float = 0.0
 
     # [FIX v12-B / v13-A] Anti-farming: threshold RANDOMIZADO por episódio
     # v12 usava 0.60 fixo → agente calibrou farming em exatamente 0.60.
@@ -180,13 +187,12 @@ class Config:
     # Soft reset to prevent endless loops, but no harsh punishment
     farm_episode_penalty:     float = 0.0
 
-    # First Strike reduzido e sujeito à fadiga por mapa
-    first_strike_bonus:       float = 4.0
+    # First Strike reforçado e sujeito à fadiga suave por mapa
+    first_strike_bonus:       float = 6.0
 
-    # [FIX v19] Dynamic Battle Curriculum (rodinhas de bicicleta)
-    # Desativado apos superarmos o plato inicial para permitir D-pad/RUN e recuperacao de cursor em batalha.
-    enable_battle_curriculum:             bool  = False
-    curriculum_win_rate_threshold:        float = 0.10
+    # [FIX v19 / v31] Dynamic Battle Curriculum: reativado até global_win_rate >= 20%
+    enable_battle_curriculum:             bool  = True
+    curriculum_win_rate_threshold:        float = 0.20
     max_potion_macro_attempts_per_battle: int   = 2
     potion_macro_cooldown_steps:          int   = 12
     max_tm_macro_attempts_per_episode:    int   = 2
@@ -195,27 +201,28 @@ class Config:
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
     whiteout_entry_cooldown:   int   = 500
-    levelup_weight:       float = 30.0
-    max_rewarded_level_base:      int   = 10
+    levelup_weight:       float = 35.0
+    max_rewarded_level_base:      int   = 12
     max_rewarded_level_per_badge: int   = 8
-    badge_weight:         float = 50.0
+    badge_weight:         float = 100.0
     milestone_weight:     float = 10.0
     parcel_pickup_bonus:   float = 150.0
     parcel_delivery_bonus: float = 300.0
+    teachy_tv_bonus:       float = 100.0
     dialogue_advance_bonus:   float = 0.15
     dialogue_stuck_grace:     int   = 25
     dialogue_stuck_penalty:   float = -0.02
-    dialogue_stuck_terminate: int   = 200
+    dialogue_stuck_terminate: int   = 450
     stuck_threshold:      int   = 150
     stuck_penalty:        float = -0.08
 
-    # Bússola direcional reforçada (alinhada ao sub-objetivo N/S/L/O)
-    north_bonus_per_tile: float = 1.5
+    # Bússola direcional alinhada ao sub-objetivo N/S/L/O
+    north_bonus_per_tile: float = 1.0
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
     # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
-    map_explore_cap_interior: float = 50.0   # bank=4 (quartos, casas) — esgota rápido
-    map_explore_cap_exterior: float = 5000.0  # bank!=4 exterior expandido para mais exploração
+    map_explore_cap_interior: float = 35.0   # bank=4 (quartos, casas) — esgota rápido
+    map_explore_cap_exterior: float = 2500.0  # bank!=4 exterior expandido para mais exploração
 
     outdoor_sustain_bonus: float = 0.0
 

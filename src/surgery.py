@@ -20,6 +20,7 @@ def build_default_env_obs_space() -> spaces.Dict:
         "image": spaces.Box(0, 255, (84, 84, 1), dtype=np.uint8),
         "ram": spaces.Box(0.0, 1.0, (RAM_SIZE,), dtype=np.float32),
         "collision_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+        "visited_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
         "goal": spaces.Box(0.0, 1.0, (GOAL_SIZE,), dtype=np.float32),
     })
 

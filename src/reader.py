@@ -11,12 +11,18 @@ class RamReader:
 
     GRASS_METATILES = frozenset({0x008, 0x009, 0x00A, 0x00B, 0x00D, 0x015, 0x016})
     WARP_METATILES = frozenset({
-        0x012, 0x013, 0x014, 0x01A, 0x01B, 0x01C, 0x01D, 0x01E, 0x01F,
-        0x025, 0x026, 0x027, 0x038, 0x039, 0x03A,
-        0x060, 0x061, 0x062, 0x063, 0x064, 0x065, 0x066, 0x067, 0x068, 0x069, 0x06A,
+        0x007,
+        0x012, 0x013, 0x014, 0x01D,
+        0x025, 0x026, 0x027,
+        0x038, 0x039, 0x03A,
+        0x290, 0x291, 0x292,
     })
+    SOLID_DOOR_METATILES = frozenset({0x062, 0x2A3, 0x2AC})
+    ITEM_TEACHY_TV = 366
 
     _IRAM_START = 262144
+    _SCRIPT_CONTEXT1_MODE_OFFSET = _IRAM_START + 0x0EB0
+    _LOCK_FIELD_CONTROLS_OFFSET = _IRAM_START + 0x0F9C
     _BACKUP_MAP_LAYOUT_OFFSET = _IRAM_START + 0x5040
     _OBJECT_EVENTS_OFFSET = 0x36E38
     _OBJECT_EVENTS_COUNT = 16
@@ -28,6 +34,8 @@ class RamReader:
     _BADGES_FLAG_OFFSET = 0x0EE0 + (0x820 >> 3)  # 0x0FE4 em SaveBlock1 (bits 0..7 = 8 insígnias)
     _POKEDEX_FLAG_OFFSET = 0x0EE0 + (0x829 >> 3)  # 0x0FE5 (FLAG_SYS_POKEDEX_GET = 0x829)
     _POKEDEX_FLAG_MASK = 1 << (0x829 & 7)         # 0x02
+    _HIDE_OAK_LAB_FLAG_OFFSET = 0x0EE0 + (0x02B >> 3)  # 0x0EE5 (FLAG_HIDE_OAK_IN_HIS_LAB = 0x02B)
+    _HIDE_OAK_LAB_FLAG_MASK = 1 << (0x02B & 7)        # 0x08
 
     @staticmethod
     def _clamp(val, lo: int, hi: int) -> int:
@@ -107,6 +115,22 @@ class RamReader:
         return 0x08010000 <= cb2 < 0x08018000
 
     @classmethod
+    def is_scripted_tutorial(cls, info: dict) -> bool:
+        """Detecta tutoriais/cutscenes scriptados como o tutorial de captura do Old Man."""
+        cb2 = int(info.get("gMain_callback2", 0) or 0)
+        return 0x08100000 <= cb2 < 0x08110000
+
+    @classmethod
+    def is_script_locked(cls, ram_array) -> bool:
+        """Detecta bloqueio real de controles/scripts na IWRAM do FireRed (USA v1.0)."""
+        if ram_array is None or len(ram_array) <= cls._LOCK_FIELD_CONTROLS_OFFSET:
+            return False
+        return bool(
+            int(ram_array[cls._LOCK_FIELD_CONTROLS_OFFSET]) != 0
+            or int(ram_array[cls._SCRIPT_CONTEXT1_MODE_OFFSET]) != 0
+        )
+
+    @classmethod
     def event_flags_sum(cls, ram_array) -> int:
         """
         Lê o bloco de Event Flags (offset 0x0EE0) e soma todos os bits ligados.
@@ -150,6 +174,11 @@ class RamReader:
         return 349 in cls.get_key_items(ram_array)
 
     @classmethod
+    def has_teachy_tv(cls, ram_array) -> bool:
+        """Verifica se o jogador já recebeu a Teachy TV (key item 366) do Old Man em Viridian."""
+        return cls.ITEM_TEACHY_TV in cls.get_key_items(ram_array)
+
+    @classmethod
     def has_pokedex(cls, ram_array) -> bool:
         wram_offset = cls.get_saveblock1_ptr(ram_array)
         if wram_offset == 0:
@@ -158,6 +187,17 @@ class RamReader:
         if len(ram_array) <= idx:
             return False
         return bool(int(ram_array[idx]) & cls._POKEDEX_FLAG_MASK)
+
+    @classmethod
+    def is_oak_in_lab(cls, ram_array) -> bool:
+        """Retorna True se Prof. Oak está no Laboratório (FLAG_HIDE_OAK_IN_HIS_LAB = 0x02B desligada)."""
+        wram_offset = cls.get_saveblock1_ptr(ram_array)
+        if wram_offset == 0:
+            return True
+        idx = wram_offset + cls._HIDE_OAK_LAB_FLAG_OFFSET
+        if len(ram_array) <= idx:
+            return True
+        return not bool(int(ram_array[idx]) & cls._HIDE_OAK_LAB_FLAG_MASK)
 
     @classmethod
     def get_potions_count(cls, ram_array) -> int:
@@ -277,6 +317,7 @@ class RamReader:
             if "badges" not in info or info["badges"] == 0:
                 info["badges"] = badge_byte
 
+        info["script_lock"] = 1 if (info.get("script_lock", 0) or cls.is_script_locked(ram_array)) else 0
         return info
 
     @classmethod
@@ -417,7 +458,9 @@ class RamReader:
                     tile = cls.TILE_BLOCKED
                 elif (tx, ty) in active_npcs:
                     tile = cls.TILE_NPC
-                elif metatile_id in cls.WARP_METATILES:
+                elif metatile_id in cls.SOLID_DOOR_METATILES or (
+                    collision == 0 and metatile_id in cls.WARP_METATILES
+                ):
                     tile = cls.TILE_WARP
                 elif collision != 0:
                     tile = cls.TILE_BLOCKED

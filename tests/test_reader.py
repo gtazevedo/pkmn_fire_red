@@ -74,9 +74,11 @@ def test_collision_grid_all_tile_types_and_object_events():
     set_tile(4, 5, 0x03FF)
     # Mato/encontro a leste (6, 5) -> TILE_GRASS (2)
     set_tile(6, 5, 0x000D)
-    # Warp / porta ao sul (5, 6) e warp com bit de colisão (4, 6) -> TILE_WARP (3)
+    # Warp / porta ao sul (5, 6) e porta solida de PokeCenter (4, 6) -> TILE_WARP (3)
     set_tile(5, 6, 0x0013)
-    set_tile(4, 6, (1 << 10) | 0x01B)
+    set_tile(4, 6, (1 << 10) | 0x062)
+    # Arvore solida (collision=1, metatile 0x01C) a noroeste (4, 4) -> TILE_BLOCKED (0)
+    set_tile(4, 4, (1 << 10) | 0x01C)
 
     # Slot 0: jogador com bit 16 isPlayer (0x10000) — NÃO pode aparecer como NPC no centro!
     struct.pack_into("<I", ram, 0x36E38, 0x00018001)
@@ -100,6 +102,7 @@ def test_collision_grid_all_tile_types_and_object_events():
     # Centro (4, 4) é o jogador em tile caminhável
     assert grid[4, 4] == RamReader.TILE_WALKABLE
     assert grid[3, 4] == RamReader.TILE_BLOCKED  # (5, 4)
+    assert grid[3, 3] == RamReader.TILE_BLOCKED  # (4, 4) arvore solida nao pode virar TILE_WARP
     assert grid[4, 3] == RamReader.TILE_BLOCKED  # (4, 5)
     assert grid[4, 5] == RamReader.TILE_GRASS    # (6, 5)
     assert grid[5, 4] == RamReader.TILE_WARP     # (5, 6)
@@ -209,3 +212,59 @@ def test_has_pokedex_flag_bit():
     # FLAG_SYS_POKEDEX_GET = 0x829 -> offset 0x0FE5 bit 0x02
     ram[sb1_off + RamReader._POKEDEX_FLAG_OFFSET] = RamReader._POKEDEX_FLAG_MASK
     assert RamReader.has_pokedex(ram) is True
+
+
+def test_is_script_locked_iwram_addresses():
+    ram = _make_ram(sb1_offset=0x025000)
+    assert RamReader.is_script_locked(ram) is False
+    info_clean = RamReader.enrich_info_from_ram({}, ram)
+    assert info_clean["script_lock"] == 0
+
+    ram[262144 + 0x0F9C] = 1
+    assert RamReader.is_script_locked(ram) is True
+    info_locked = RamReader.enrich_info_from_ram({}, ram)
+    assert info_locked["script_lock"] == 1
+
+    ram[262144 + 0x0F9C] = 0
+    ram[262144 + 0x0EB0] = 3
+    assert RamReader.is_script_locked(ram) is True
+    assert RamReader.enrich_info_from_ram({}, ram)["script_lock"] == 1
+
+
+def test_solid_doors_scripted_tutorial_and_teachy_tv():
+    w, h = 24, 24
+    map_off = 0x031000
+    sb1_off = 0x025000
+    ram = _make_ram(sb1_offset=sb1_off, map_width=w, map_height=h, map_offset=map_off)
+    struct.pack_into("<hh", ram, sb1_off, 5, 5)
+    for gy in range(h):
+        for gx in range(w):
+            struct.pack_into("<H", ram, map_off + 2 * (gy * w + gx), 0x0001)
+
+    def set_tile(tx: int, ty: int, raw_entry: int) -> None:
+        gx, gy = tx + 7, ty + 7
+        struct.pack_into("<H", ram, map_off + 2 * (gy * w + gx), raw_entry)
+
+    set_tile(4, 5, 0x0007)                 # Escada do quarto (walkable warp)
+    set_tile(6, 5, 0x0291)                 # Tapete de saida do Oak's Lab
+    set_tile(5, 4, (1 << 10) | 0x2A3)      # Porta solida de casa em Pallet
+    set_tile(5, 6, (1 << 10) | 0x2AC)      # Porta solida do Oak's Lab
+
+    grid = RamReader.get_collision_grid(ram)
+    assert grid[4, 3] == RamReader.TILE_WARP
+    assert grid[4, 5] == RamReader.TILE_WARP
+    assert grid[3, 4] == RamReader.TILE_WARP
+    assert grid[5, 4] == RamReader.TILE_WARP
+
+    assert RamReader.is_scripted_tutorial({"gMain_callback2": 0x08107F11}) is True
+    assert RamReader.is_scripted_tutorial({"gMain_callback2": 0x080565B5}) is False
+
+    assert RamReader.has_teachy_tv(ram) is False
+    struct.pack_into("<HH", ram, sb1_off + 0x03B8, RamReader.ITEM_TEACHY_TV, 1)
+    assert RamReader.has_teachy_tv(ram) is True
+
+    # FLAG_HIDE_OAK_IN_HIS_LAB (0x02B) ligada -> Oak ausente; desligada ou ram None -> True
+    assert RamReader.is_oak_in_lab(None) is True
+    assert RamReader.is_oak_in_lab(ram) is True
+    ram[sb1_off + RamReader._HIDE_OAK_LAB_FLAG_OFFSET] |= RamReader._HIDE_OAK_LAB_FLAG_MASK
+    assert RamReader.is_oak_in_lab(ram) is False

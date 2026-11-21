@@ -16,6 +16,7 @@ from src.mlflow_utils import (
     MLFLOW_TRACKING_URI,
     TRAIN_EXPERIMENT_DESCRIPTION,
     build_run_name,
+    close_orphan_runs,
     ensure_experiment_metadata,
     standard_run_tags,
 )
@@ -49,6 +50,9 @@ def main(reset_training: bool = False, tracking_uri: str = MLFLOW_TRACKING_URI) 
         },
     )
     mlflow.set_experiment(EXPERIMENT_TRAIN)
+    closed = close_orphan_runs(client, EXPERIMENT_TRAIN)
+    if closed:
+        print(f"[MLflow] Encerrados {len(closed)} runs órfãos em RUNNING: {closed}")
 
     with mlflow.start_run(run_name=build_run_name()):
         params = {k: getattr(CFG, k) for k in dir(CFG) if not k.startswith('_') and not callable(getattr(CFG, k))}

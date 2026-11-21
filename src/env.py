@@ -1,5 +1,6 @@
 import os
 import re
+import math
 import random
 from typing import Optional
 import numpy as np
@@ -23,12 +24,18 @@ class PokemonEnv(gym.Env):
     Gymnasium wrapper around stable-retro PokemonFireRed.
     """
 
-    def __init__(self, env_id: int = 0, fixed_state_file: Optional[str] = None):
+    def __init__(
+        self,
+        env_id: int = 0,
+        fixed_state_file: Optional[str] = None,
+        enable_stochasticity: bool = True,
+    ):
         super().__init__()
         if retro is None:
             raise ImportError("stable-retro é necessário para instanciar PokemonEnv")
         self.env_id = env_id
         self._fixed_state_file = fixed_state_file
+        self._enable_stochasticity = bool(enable_stochasticity)
         self.env    = retro.make(game="PokemonFireRed", state=None)
         self._total_steps_ref: list[int] = [0]
         self._cached_total_steps: int    = 0
@@ -38,6 +45,7 @@ class PokemonEnv(gym.Env):
             "image":          spaces.Box(0, 255, (84, 84, 1), dtype=np.uint8),
             "ram":            spaces.Box(0.0, 1.0, (RAM_SIZE,), dtype=np.float32),
             "collision_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+            "visited_grid":   spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
             "goal":           spaces.Box(0.0, 1.0, (GOAL_SIZE,), dtype=np.float32),
         })
 
@@ -67,10 +75,15 @@ class PokemonEnv(gym.Env):
         self._steps_interior_only: int = 0        # contador de steps só em bank=4
         self._battle_screenshot_saved: bool = False
         self._had_parcel_in_ep: bool = False
+        self._had_teachy_tv_in_ep: bool = False
         self._battle_potion_attempts: int = 0
         self._battle_potion_cooldown: int = 0
         self._episode_tm_attempts: int = 0
         self._last_overworld_tile: tuple = ()
+        self._pending_event_save_flags: int = 0
+        self._steps_in_current_map: int = 0
+        self._last_overworld_move_action: Optional[int] = None
+        self._last_script_lock: bool = False
 
     @property
     def max_steps(self) -> int:
@@ -96,9 +109,18 @@ class PokemonEnv(gym.Env):
         ms = self.max_steps
         ram = self.env.get_ram()
         RamReader.enrich_info_from_ram(info, ram)
+        px_norm = RamReader.coord(info, "player_x") / CFG.max_coord
+        py_norm = RamReader.coord(info, "player_y") / CFG.max_coord
+        if (
+            self._enable_stochasticity
+            and CFG.coord_dropout_prob > 0.0
+            and random.random() < CFG.coord_dropout_prob
+        ):
+            px_norm = 0.0
+            py_norm = 0.0
         base_ram = np.array([
-            RamReader.coord(info, "player_x")  / CFG.max_coord,
-            RamReader.coord(info, "player_y")  / CFG.max_coord,
+            px_norm,
+            py_norm,
             RamReader.map_id(info)             / CFG.max_map_id,
             RamReader.map_bank(info)           / CFG.max_map_id,
             float(RamReader.is_in_battle(info)),
@@ -135,11 +157,15 @@ class PokemonEnv(gym.Env):
             / CFG.steps_in_battle_norm_cap,
         ], dtype=np.float32)
 
+        px = RamReader.coord(info, "player_x")
+        py = RamReader.coord(info, "player_y")
+        mk = (RamReader.map_bank(info), RamReader.map_id(info))
         return {
             "image":          self._to_gray_84(raw_frame),
             "ram":            np.concatenate([base_ram, text_ram, idle_ratio,
                                               outcome_potential, steps_in_battle_norm]),
             "collision_grid": RamReader.get_collision_grid_normalized(ram, info),
+            "visited_grid":   self._stats.get_visited_grid(mk, px, py, GRID_SIZE),
             "goal":           self._strategist.get_goal_embedding(),
         }
 
@@ -148,6 +174,50 @@ class PokemonEnv(gym.Env):
         for _ in range(n):
             obs, _, _, _, info = self.env.step(ActionSpace.NO_OP)
         return obs, info
+
+    def _random_safe_walk(self, raw_frame: Optional[np.ndarray], info: dict) -> tuple:
+        if not (self._enable_stochasticity and CFG.reset_random_walk_max > 0):
+            return raw_frame, info
+        ram = self.env.get_ram()
+        RamReader.enrich_info_from_ram(info, ram)
+        if (
+            int(info.get("gMain_callback2", 0) or 0) != 134571445
+            or RamReader.is_script_locked(ram)
+            or RamReader.is_in_battle(info)
+        ):
+            return raw_frame, info
+
+        origin_map = (RamReader.map_bank(info), RamReader.map_id(info))
+        n_walk = random.randint(0, CFG.reset_random_walk_max)
+        center = GRID_SIZE // 2
+        cardinal_offsets = (
+            (2, center - 1, center),  # UP
+            (3, center + 1, center),  # DOWN
+            (4, center, center - 1),  # LEFT
+            (5, center, center + 1),  # RIGHT
+        )
+        for _ in range(n_walk):
+            grid = RamReader.get_collision_grid(ram, info)
+            safe_moves = [
+                act_idx
+                for act_idx, r_idx, c_idx in cardinal_offsets
+                if grid[r_idx, c_idx] == RamReader.TILE_WALKABLE
+            ]
+            if not safe_moves:
+                break
+            chosen = random.choice(safe_moves)
+            raw_frame, _, info = self._run_action(ActionSpace.get(chosen))
+            ram = self.env.get_ram()
+            RamReader.enrich_info_from_ram(info, ram)
+            cur_map = (RamReader.map_bank(info), RamReader.map_id(info))
+            if (
+                cur_map != origin_map
+                or RamReader.is_script_locked(ram)
+                or RamReader.is_in_battle(info)
+                or int(info.get("gMain_callback2", 0) or 0) != 134571445
+            ):
+                break
+        return raw_frame, info
 
     def _run_potion_macro(self):
         B_A     = np.array([0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0])
@@ -299,6 +369,12 @@ class PokemonEnv(gym.Env):
                 raw_frame, _, _, _, info = self.env.step(ActionSpace.NO_OP)
             RamReader.enrich_info_from_ram(info, self.env.get_ram())
 
+        if self._enable_stochasticity and CFG.reset_random_noop_max > 0:
+            jitter = random.randint(0, CFG.reset_random_noop_max)
+            if jitter > 0:
+                raw_frame, info = self._warm_up(n=jitter)
+        raw_frame, info = self._random_safe_walk(raw_frame, info)
+
         ram_post_reset = self.env.get_ram()
         RamReader.enrich_info_from_ram(info, ram_post_reset)
         RamReader.debug_dump(info, self.env_id, "POST-RESET")
@@ -314,6 +390,7 @@ class PokemonEnv(gym.Env):
         self._last_raw_frame = raw_frame
         self._battle_screenshot_saved = False
         self._had_parcel_in_ep = RamReader.has_oaks_parcel(ram_post_reset)
+        self._had_teachy_tv_in_ep = RamReader.has_teachy_tv(ram_post_reset)
         self._parcel_delivered_in_ep = False
         self._battle_potion_attempts = 0
         self._battle_potion_cooldown = 0
@@ -327,9 +404,13 @@ class PokemonEnv(gym.Env):
 
         # [FIX v17] Reset incentivos positivos
         self._explore_reward_per_map  = {}
-        self._prev_map_key            = ()
+        self._prev_map_key            = (RamReader.map_bank(info), RamReader.map_id(info))
         self._ever_left_interior      = False
         self._steps_interior_only     = 0
+        self._pending_event_save_flags = 0
+        self._steps_in_current_map    = 0
+        self._last_overworld_move_action = None
+        self._last_script_lock        = False
 
         log.debug(
             f"[Env {self.env_id}] Reset ep={self._episode_num} — "
@@ -345,6 +426,22 @@ class PokemonEnv(gym.Env):
 
     def step(self, action_idx: int):
         terminated = False
+        if (
+            self._enable_stochasticity
+            and CFG.sticky_action_prob > 0.0
+            and not getattr(self._stats, "was_in_battle", False)
+            and not self._last_script_lock
+        ):
+            if (
+                action_idx in (2, 3, 4, 5)
+                and self._last_overworld_move_action in (2, 3, 4, 5)
+                and random.random() < CFG.sticky_action_prob
+            ):
+                action_idx = self._last_overworld_move_action
+            self._last_overworld_move_action = action_idx if action_idx in (2, 3, 4, 5) else None
+        else:
+            self._last_overworld_move_action = None
+
         action = ActionSpace.get(action_idx)
         action_name = ActionSpace.NAMES[action_idx]
 
@@ -366,6 +463,7 @@ class PokemonEnv(gym.Env):
         RamReader.enrich_info_from_ram(info, ram_array)
         cv_state = self._vision.detect_state(raw_frame)
         _cb2 = int(info.get("gMain_callback2", 0) or 0)
+        _in_scripted_tutorial = RamReader.is_scripted_tutorial(info)
         _not_in_overworld = (_cb2 != 134571445)
         _is_whiteout   = (RamReader.party_hp(info) == 0 and RamReader.party_max_hp(info) > 0)
         _was_in_battle = getattr(self._stats, "was_in_battle", False)
@@ -379,6 +477,7 @@ class PokemonEnv(gym.Env):
             or (cv_state == GameState.DIALOGUE)
             or (not _in_battle_now and _not_in_overworld and _cb2 != 0)
         )
+        self._last_script_lock = bool(_script_lock)
 
         if not _in_battle_now:
             self._battle_potion_attempts = 0
@@ -455,7 +554,19 @@ class PokemonEnv(gym.Env):
         # Ficar em diálogos ("Gary wants to battle") gasta tempo e reduz a recompensa.
         # Isso ensina o agente a avançar os textos rapidamente.
         step_reward += self._rewards.add("time_pen", CFG.time_penalty)
-        text_bonus      = self._advisor.update(_in_battle_now, _script_lock, action_idx, ram_array)
+        party_max_hp_now = RamReader.party_max_hp(info)
+        party_hp_pct_now = (RamReader.party_hp(info) / party_max_hp_now) if party_max_hp_now > 0 else 1.0
+        text_bonus      = self._advisor.update(
+            _in_battle_now,
+            _script_lock,
+            action_idx,
+            ram_array,
+            party_level=RamReader.party_level(info),
+            map_key=(RamReader.map_bank(info), RamReader.map_id(info)),
+            party_hp_pct=party_hp_pct_now,
+        )
+        if _in_scripted_tutorial:
+            self._advisor.dialogue_stuck_steps = 0
         step_reward    += self._rewards.add("text", text_bonus)
 
         # [FIX v18.3] Novas recompensas Whiddy-style
@@ -468,7 +579,7 @@ class PokemonEnv(gym.Env):
         event_bonus, total_flags = self._stats.update_events(ram_array)
         if event_bonus > 0:
             step_reward += self._rewards.add("milestone", event_bonus)
-            self._progress.check_and_save(self.env, total_flags, self.env_id)
+            self._pending_event_save_flags = max(self._pending_event_save_flags, total_flags)
 
         strategist_bonus = self._strategist.update(info, ram_array, _in_battle_now, total_flags)
         if strategist_bonus != 0.0:
@@ -480,6 +591,27 @@ class PokemonEnv(gym.Env):
         map_bank = RamReader.map_bank(info)
         tile     = (map_bank, map_id, x, y)
         map_key  = (map_bank, map_id)
+
+        if map_key != self._prev_map_key:
+            self._steps_in_current_map = 0
+            self._prev_map_key = map_key
+        elif not _in_battle_now:
+            self._steps_in_current_map += 1
+
+        grid_now = RamReader.get_collision_grid(ram_array, info)
+        center_is_warp = bool(grid_now[GRID_SIZE // 2, GRID_SIZE // 2] == RamReader.TILE_WARP)
+        is_clean_overworld_save_frame = (
+            _cb2 == 134571445
+            and not _script_lock
+            and not _in_battle_now
+            and not _is_whiteout
+            and not center_is_warp
+            and RamReader.party_level(info) > 0
+            and RamReader.party_hp(info) >= max(1, math.ceil(RamReader.party_max_hp(info) * 0.50))
+        )
+        if self._pending_event_save_flags > 0 and is_clean_overworld_save_frame:
+            self._progress.check_and_save(self.env, self._pending_event_save_flags, self.env_id)
+            self._pending_event_save_flags = 0
 
         if not _in_battle_now:
             if self._last_overworld_tile and tile != self._last_overworld_tile:
@@ -513,6 +645,15 @@ class PokemonEnv(gym.Env):
             log.info(
                 f"[Env {self.env_id}] 🎉 Oak's Parcel entregue ao Prof. Oak! "
                 f"+{CFG.parcel_delivery_bonus:.1f}"
+            )
+
+        has_teachy_tv_now = RamReader.has_teachy_tv(ram_array)
+        if has_teachy_tv_now and not self._had_teachy_tv_in_ep:
+            self._had_teachy_tv_in_ep = True
+            step_reward += self._rewards.add("milestone", CFG.teachy_tv_bonus)
+            log.info(
+                f"[Env {self.env_id}] 📺 Teachy TV obtido (Old Man tutorial concluído)! "
+                f"+{CFG.teachy_tv_bonus:.1f}"
             )
 
         # [FIX v18.1] Salva dinamicamente o state exterior apenas quando ele está
@@ -579,7 +720,7 @@ class PokemonEnv(gym.Env):
                 step_reward += self._rewards.add("milestone", CFG.outdoor_sustain_bonus)
 
             explore_r, is_new_map = self._stats.update_exploration(
-                tile, map_key, include_new_map_bonus=False
+                tile, map_key, include_new_map_bonus=False, script_lock=_script_lock
             )
 
             # [FIX v17-C] Cap diferenciado: interior esgota rápido, exterior é abundante
@@ -594,20 +735,16 @@ class PokemonEnv(gym.Env):
             step_reward += self._rewards.add("explore", explore_r)
 
             if is_new_map:
-                map_disc_bonus = CFG.new_map_bonus_route if map_bank == 3 else CFG.new_map_bonus
-                step_reward += self._rewards.add("map_disc", map_disc_bonus)
+                if self._stats.steps >= 2:
+                    map_disc_bonus = CFG.new_map_bonus_route if map_bank == 3 else CFG.new_map_bonus
+                    step_reward += self._rewards.add("map_disc", map_disc_bonus)
                 # Reset directional bounds on map transition so entering a map doesn't give a free bonus
                 self._stats.x_min_episode = x
                 self._stats.x_max_episode = x
                 self._stats.y_min_episode = y
                 self._stats.y_max_episode = y
 
-            if (
-                _cb2 == 134571445
-                and not _script_lock
-                and RamReader.party_level(info) > 0
-                and RamReader.party_hp(info) >= max(1, int(RamReader.party_max_hp(info) * 0.3))
-            ):
+            if is_clean_overworld_save_frame and self._steps_in_current_map >= 2:
                 self._progress.check_and_save_map_milestone(
                     self.env,
                     total_flags,
@@ -645,6 +782,7 @@ class PokemonEnv(gym.Env):
                 log.debug(f"[Env {self.env_id}] North progress! y={y} (+{dir_r:.1f})")
         else:
             is_new_map = False
+            self._stats.steps_on_cur_tile = 0
 
         if is_new_map:
             log.info(f"[Env {self.env_id}] New map: bank={map_key[0]} id={map_key[1]}")

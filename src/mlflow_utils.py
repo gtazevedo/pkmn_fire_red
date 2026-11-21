@@ -25,8 +25,8 @@ TUNING_EXPERIMENT_DESCRIPTION = (
 )
 
 REGISTERED_MODEL_DESCRIPTION = (
-    "Política RecurrentPPO MultiInputLstmPolicy (CNN 84x84x4 + RAM 23 + Collision Grid 9x9 + "
-    "Goal Embedding 6 + VecNormalize) para Pokémon FireRed (USA v1.0)."
+    "Política RecurrentPPO MultiInputLstmPolicy (CNN 84x84x1 + RAM 23 + Collision Grid 9x9 + "
+    "Visited Grid 9x9 + Goal Embedding 6 + VecNormalize) para Pokémon FireRed (USA v1.0)."
 )
 
 
@@ -71,7 +71,7 @@ def standard_run_tags(
         "ollama_model": CFG.ollama_model,
         "llm_enabled": "true",
         "sampling_strategy": "frontier_bias_50_30_20",
-        "obs_spec": f"RAM{RAM_SIZE}_GRID{GRID_SIZE}x{GRID_SIZE}_GOAL{GOAL_SIZE}",
+        "obs_spec": f"RAM{RAM_SIZE}_GRID{GRID_SIZE}x{GRID_SIZE}_VISITED{GRID_SIZE}x{GRID_SIZE}_GOAL{GOAL_SIZE}",
     }
     note_val = notes if notes is not None else os.getenv("MLFLOW_RUN_NOTES", "")
     if note_val and note_val.strip():

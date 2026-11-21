@@ -446,3 +446,164 @@ def test_vision_ignores_oaks_lab_floor_false_dialogue():
     box[25:, 130:190] = 90
     frame[112:152, 8:232] = box
     assert vision.detect_state(frame) == GameState.OVERWORLD
+
+
+def test_strategist_3b_hallucination_guardrails_viridian_exits_and_anti_bounce(monkeypatch):
+    class FakeResp:
+        def __init__(self, payload: bytes):
+            self._buf = io.BytesIO(payload)
+
+        def read(self):
+            return self._buf.read()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    canned_responses = iter([
+        {"sub_goal": "Rest at Oak Lab", "target_map_bank": 4, "target_map_id": 4, "priority": "explore", "navigation_hint": "north"},
+        {"sub_goal": "Rest at Oak Lab", "target_map_bank": 3, "target_map_id": 4, "priority": "explore", "navigation_hint": "none"},
+        {"sub_goal": "Explore", "target_map_bank": 3, "target_map_id": 3, "priority": "explore", "navigation_hint": "north"},
+    ])
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResp(json.dumps({"response": json.dumps(next(canned_responses))}).encode("utf-8"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+
+    # 1. Alucinacao (4,1) -> (4,4) north deve manter fallback (4,0) east
+    strat.update({"map_bank": 4, "map_id": 1, "p1_lvl": 0}, None, in_battle=False, total_flags=111)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (4, 0)
+    assert strat.current_goal.navigation_hint == "east"
+
+    # 2. Alucinacao (3,1) -> (3,4) none deve manter fallback (5,3) east
+    strat.update({"map_bank": 3, "map_id": 1, "p1_lvl": 7, "p1_hp": 22, "p1_maxhp": 24}, None, in_battle=False, total_flags=122)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (5, 3)
+    assert strat.current_goal.navigation_hint == "east"
+
+    # 3. Alucinacao (5,3) -> (3,3) north sem Parcel deve manter fallback (3,1) south
+    strat.update({"map_bank": 5, "map_id": 3, "p1_lvl": 7, "p1_hp": 22, "p1_maxhp": 24}, None, in_battle=False, total_flags=122)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (3, 1)
+    assert strat.current_goal.navigation_hint == "south"
+
+    # Heuristica de saida para Viridian Center (5,4) e interior de Pewter (6,1)
+    g_vc = strat._heuristic_goal(strat.build_context({"map_bank": 5, "map_id": 4, "p1_lvl": 7, "p1_hp": 22, "p1_maxhp": 24}, None, False, 124))
+    assert (g_vc.target_map_bank, g_vc.target_map_id) == (3, 1) and g_vc.navigation_hint == "south"
+    g_pew = strat._heuristic_goal(strat.build_context({"map_bank": 6, "map_id": 1, "p1_lvl": 9, "p1_hp": 26, "p1_maxhp": 26}, None, False, 124))
+    assert (g_pew.target_map_bank, g_pew.target_map_id) == (3, 2) and g_pew.navigation_hint == "south"
+
+    # Anti-bounce de border: (3,19) -> (3,1) paga 1x; voltar a (3,19) e depois (3,1) paga 0
+    strat.reset({"map_bank": 3, "map_id": 19, "p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24}, None)
+    strat._ollama_cooldown_until = 1e18
+    strat.update({"map_bank": 3, "map_id": 19, "p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24}, None, False, 122)
+    b1 = strat.update({"map_bank": 3, "map_id": 1, "p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24}, None, False, 122)
+    assert b1 == CFG.strategist_goal_bonus
+    b_back = strat.update({"map_bank": 3, "map_id": 19, "p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24}, None, False, 122)
+    b_revisit = strat.update({"map_bank": 3, "map_id": 1, "p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24}, None, False, 122)
+    assert b_back == 0.0 and b_revisit == 0.0
+    strat.close()
+
+
+def test_route22_to_25_graph_and_context_aware_yes_no():
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+
+    # Route 22 (3, 41) sem 8 insignias deve retornar a leste para Viridian City (3, 1)
+    g_r22_early = strat._heuristic_goal(
+        strat.build_context({"map_bank": 3, "map_id": 41, "p1_lvl": 8, "p1_hp": 20, "p1_maxhp": 26, "badges": 0}, None, False, 124)
+    )
+    assert (g_r22_early.target_map_bank, g_r22_early.target_map_id) == (3, 1)
+    assert g_r22_early.navigation_hint == "east"
+
+    # Route 22 (3, 41) com 8 insignias avanca a oeste para Route 23 (3, 42)
+    g_r22_e4 = strat._heuristic_goal(
+        strat.build_context({"map_bank": 3, "map_id": 41, "p1_lvl": 55, "p1_hp": 180, "p1_maxhp": 180, "badges": 0xFF}, None, False, 300)
+    )
+    assert (g_r22_e4.target_map_bank, g_r22_e4.target_map_id) == (3, 42)
+    assert g_r22_e4.navigation_hint == "west"
+
+    # Cerulean (3,3) -> Route 24 (3,43) -> Route 25 (3,44) -> Cerulean (3,3)
+    g_cer = strat._heuristic_goal(
+        strat.build_context({"map_bank": 3, "map_id": 3, "p1_lvl": 20, "p1_hp": 50, "p1_maxhp": 50}, None, False, 200)
+    )
+    assert (g_cer.target_map_bank, g_cer.target_map_id) == (3, 43)
+    g_r24 = strat._heuristic_goal(
+        strat.build_context({"map_bank": 3, "map_id": 43, "p1_lvl": 20, "p1_hp": 50, "p1_maxhp": 50}, None, False, 200)
+    )
+    assert (g_r24.target_map_bank, g_r24.target_map_id) == (3, 44)
+    g_r25 = strat._heuristic_goal(
+        strat.build_context({"map_bank": 3, "map_id": 44, "p1_lvl": 20, "p1_hp": 50, "p1_maxhp": 50}, None, False, 200)
+    )
+    assert (g_r25.target_map_bank, g_r25.target_map_id) == (3, 3)
+    strat.close()
+
+    # RamAdvisor YES/NO contextual
+    adv = RamAdvisor()
+    ram_starter = _ram_with_dialogue("So! You want the fire POKeMON, CHARMANDER? YES NO")
+    bonus_a_starter = adv.update(
+        in_battle=False, script_lock=True, action_idx=adv.A_IDX,
+        ram_array=ram_starter, party_level=0, map_key=(4, 3), party_hp_pct=1.0,
+    )
+    assert np.isclose(bonus_a_starter, adv.YES_NO_BONUS)
+    assert np.isclose(adv.get_embedding()[1], adv.A_IDX / 5.0)
+
+    # Nickname prompt com party_level=5 volta a recomendar B
+    adv.reset()
+    ram_nick = _ram_with_dialogue("Do you want to give a nickname? YES NO")
+    bonus_b_nick = adv.update(
+        in_battle=False, script_lock=True, action_idx=adv.B_IDX,
+        ram_array=ram_nick, party_level=5, map_key=(4, 3), party_hp_pct=1.0,
+    )
+    assert np.isclose(bonus_b_nick, adv.YES_NO_BONUS)
+    assert np.isclose(adv.get_embedding()[1], adv.B_IDX / 5.0)
+
+    # Nurse Joy com HP baixo (<80%) recomenda A; com HP 100% volta a recomendar B
+    adv.reset()
+    ram_heal = _ram_with_dialogue("Would you like to rest your tired POKeMON? YES NO")
+    bonus_a_heal = adv.update(
+        in_battle=False, script_lock=True, action_idx=adv.A_IDX,
+        ram_array=ram_heal, party_level=8, map_key=(5, 4), party_hp_pct=0.30,
+    )
+    assert np.isclose(bonus_a_heal, adv.YES_NO_BONUS)
+    assert np.isclose(adv.get_embedding()[1], adv.A_IDX / 5.0)
+
+    bonus_a_full = adv.update(
+        in_battle=False, script_lock=True, action_idx=adv.A_IDX,
+        ram_array=ram_heal, party_level=8, map_key=(5, 4), party_hp_pct=1.0,
+    )
+    assert bonus_a_full == 0.0
+    assert np.isclose(adv.get_embedding()[1], adv.B_IDX / 5.0)
+
+
+def test_strategist_empty_oaks_lab_vs_oak_present():
+    import struct
+
+    ram = np.zeros(262144 + 0x6000, dtype=np.uint8)
+    sb1 = 0x025000
+    struct.pack_into("<I", ram, 262144 + 0x5008, 0x02000000 | sb1)
+    # 0x02B ON -> Oak nao esta no Lab ainda
+    ram[sb1 + 0x0EE0 + (0x02B >> 3)] = 1 << (0x02B & 7)
+
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+    strat._ollama_cooldown_until = 1e18
+
+    # Em Pallet (3,0) alvo inicial e (4,3)
+    strat.reset({"map_bank": 3, "map_id": 0, "p1_lvl": 0}, ram)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (4, 3)
+
+    # Entrar no Lab vazio (0x02B ON) nao paga alinhamento e manda sair ao sul
+    b_empty = strat.update({"map_bank": 4, "map_id": 3, "p1_lvl": 0}, ram, in_battle=False, total_flags=112)
+    assert b_empty == 0.0
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (3, 0)
+    assert strat.current_goal.navigation_hint == "south"
+
+    # Sair para Pallet (3,0) e entrar no Lab apos Oak aparecer (0x02B OFF) paga alinhamento e manda interagir
+    strat.update({"map_bank": 3, "map_id": 0, "p1_lvl": 0}, ram, in_battle=False, total_flags=113)
+    ram[sb1 + 0x0EE0 + (0x02B >> 3)] = 0
+    b_real = strat.update({"map_bank": 4, "map_id": 3, "p1_lvl": 0}, ram, in_battle=False, total_flags=114)
+    assert np.isclose(b_real, CFG.strategist_goal_bonus)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (4, 3)
+    assert strat.current_goal.navigation_hint == "interact"
+    strat.close()

@@ -46,7 +46,9 @@ def evaluate(
     mlflow.set_experiment(EXPERIMENT_TRAIN)
 
     fixed_state = CFG.state_file if from_start else None
-    venv = DummyVecEnv([lambda: PokemonEnv(env_id=99, fixed_state_file=fixed_state)])
+    venv = DummyVecEnv([
+        lambda: PokemonEnv(env_id=99, fixed_state_file=fixed_state, enable_stochasticity=False)
+    ])
     vecnorm_path = CFG.model_path + "_vecnorm.pkl"
     if os.path.exists(vecnorm_path):
         venv = VecNormalize.load(vecnorm_path, venv)
@@ -73,6 +75,8 @@ def evaluate(
     ep_left_house: list[float] = []
     ep_entered_lab: list[float] = []
     ep_got_starter: list[float] = []
+    ep_reached_route1: list[float] = []
+    ep_beat_rival: list[float] = []
 
     t_start = time.time()
     try:
@@ -138,11 +142,15 @@ def evaluate(
                     "victories": raw_env._stats.victories,
                     "maps_visited": len(raw_env._stats.map_visits),
                 }
+            ep_max_lvl = max(ep_max_lvl, int(ep_metrics.get("party_level", 0)))
+            ep_victories = int(ep_metrics.get("victories", 0))
             ep_scores.append(PokemonCallback._progress_score(ep_metrics))
             ep_left_bedroom.append(float(any(m != (4, 1) for m in ep_maps_seen)))
             ep_left_house.append(float((3, 0) in ep_maps_seen or any(b != 4 for b, _ in ep_maps_seen)))
             ep_entered_lab.append(float((4, 3) in ep_maps_seen))
             ep_got_starter.append(float(ep_max_lvl > 0))
+            ep_reached_route1.append(float((3, 19) in ep_maps_seen))
+            ep_beat_rival.append(float(ep_max_lvl >= 6 or ep_victories > 0))
 
         elapsed = max(time.time() - t_start, 1e-6)
         total_eval_steps = sum(ep_steps)
@@ -173,6 +181,8 @@ def evaluate(
                 "eval/left_house_rate": float(np.mean(ep_left_house)),
                 "eval/entered_oaks_lab_rate": float(np.mean(ep_entered_lab)),
                 "eval/got_starter_rate": float(np.mean(ep_got_starter)),
+                "eval/reached_route1_rate": float(np.mean(ep_reached_route1)),
+                "eval/beat_rival_rate": float(np.mean(ep_beat_rival)),
             })
     finally:
         venv.close()

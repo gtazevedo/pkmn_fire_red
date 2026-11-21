@@ -149,3 +149,77 @@ def test_weight_surgery_preserves_weights_and_outputs(tmp_path):
     assert new_model.num_timesteps == 32
     new_venv.close()
     old_venv.close()
+
+
+def test_weight_surgery_v30_to_v31_with_visited_grid(tmp_path):
+    v30_space = spaces.Dict({
+        "image": spaces.Box(0, 255, (84, 84, 1), dtype=np.uint8),
+        "ram": spaces.Box(0.0, 1.0, (RAM_SIZE,), dtype=np.float32),
+        "collision_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+        "goal": spaces.Box(0.0, 1.0, (GOAL_SIZE,), dtype=np.float32),
+    })
+    v31_space = spaces.Dict({
+        "image": spaces.Box(0, 255, (84, 84, 1), dtype=np.uint8),
+        "ram": spaces.Box(0.0, 1.0, (RAM_SIZE,), dtype=np.float32),
+        "collision_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+        "visited_grid": spaces.Box(0.0, 1.0, (GRID_SIZE, GRID_SIZE), dtype=np.float32),
+        "goal": spaces.Box(0.0, 1.0, (GOAL_SIZE,), dtype=np.float32),
+    })
+
+    v30_venv = VecNormalize(DummyVecEnv([lambda: _DummyEnv(v30_space)]), norm_obs=False, norm_reward=True)
+    v30_model = RecurrentPPO(
+        "MultiInputLstmPolicy", v30_venv, n_steps=8, batch_size=8, n_epochs=1, verbose=0, seed=7, device="cpu"
+    )
+    v30_model.learn(total_timesteps=16)
+
+    base = tmp_path / "pokemon_lstm_model"
+    zip_path, vn_path, stamp_path = str(base) + ".zip", str(base) + "_vecnorm.pkl", str(base) + ".stamp"
+    v30_model.save(str(base))
+    v30_venv.save(vn_path)
+    with open(stamp_path, "w") as f:
+        f.write("v30_hrl_strategist_grid9x9")
+
+    rng = np.random.default_rng(1)
+    img = rng.integers(0, 255, size=(1, 84, 84, 1), dtype=np.uint8)
+    ram = rng.random(size=(1, RAM_SIZE), dtype=np.float32)
+    cgrid = rng.random(size=(1, GRID_SIZE, GRID_SIZE), dtype=np.float32)
+    goal = rng.random(size=(1, GOAL_SIZE), dtype=np.float32)
+    states0 = (torch.zeros((1, 1, 256)), torch.zeros((1, 1, 256)))
+    ep0 = torch.ones((1,), dtype=torch.float32)
+
+    with torch.no_grad():
+        obs30, _ = v30_model.policy.obs_to_tensor({
+            "image": np.transpose(img, (0, 3, 1, 2)), "ram": ram, "collision_grid": cgrid, "goal": goal
+        })
+        dist30, _ = v30_model.policy.get_distribution(obs30, states0, ep0)
+        probs30 = dist30.distribution.probs.clone()
+
+    upgraded = upgrade_checkpoint_if_needed(
+        model_zip_path=zip_path,
+        vecnorm_path=vn_path,
+        stamp_path=stamp_path,
+        target_obs_space=v31_space,
+        target_stamp=CFG.config_stamp,
+    )
+    assert upgraded is True
+    v31_venv = VecNormalize.load(vn_path, DummyVecEnv([lambda: _DummyEnv(v31_space)]))
+    v31_model = RecurrentPPO.load(str(base), env=v31_venv, device="cpu")
+    assert v31_model.policy.lstm_actor.weight_ih_l0.shape == (1024, 447)
+    assert v31_model.policy.lstm_critic.weight_ih_l0.shape == (1024, 447)
+
+    with torch.no_grad():
+        obs31, _ = v31_model.policy.obs_to_tensor({
+            "image": np.transpose(img, (0, 3, 1, 2)),
+            "ram": ram,
+            "collision_grid": cgrid,
+            "visited_grid": np.zeros((1, GRID_SIZE, GRID_SIZE), dtype=np.float32),
+            "goal": goal,
+        })
+        dist31, _ = v31_model.policy.get_distribution(obs31, states0, ep0)
+        probs31 = dist31.distribution.probs.clone()
+
+    assert torch.allclose(probs30, probs31, atol=1e-6)
+    v31_model.learn(total_timesteps=16, reset_num_timesteps=False)
+    assert v31_model.num_timesteps == 32
+    v31_venv.close()
+    v30_venv.close()

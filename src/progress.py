@@ -8,7 +8,7 @@ from collections import defaultdict
 from typing import Optional
 import numpy as np
 import cv2
-from src.config import CFG, log
+from src.config import CFG, GRID_SIZE, log
 from src.reader import RamReader
 
 class ProgressManager:
@@ -105,7 +105,11 @@ class ProgressManager:
         u = chooser.random()
         if u < CFG.frontier_prob:
             self.tier_counts["frontier"] += 1
-            return chooser.choice(frontier_states)
+            if len(frontier_states) > 1 and chooser.random() < CFG.frontier_top_state_share:
+                return frontier_states[-1]
+            if len(frontier_states) > 1:
+                return chooser.choice(frontier_states[:-1])
+            return frontier_states[0]
         if u < CFG.frontier_prob + CFG.intermediate_prob:
             self.tier_counts["intermediate"] += 1
             return chooser.choice(intermediate_states)
@@ -523,8 +527,13 @@ class EpisodeStats:
         tile: tuple,
         map_key: tuple,
         include_new_map_bonus: bool = True,
+        script_lock: bool = False,
     ) -> tuple[float, bool]:
-        if map_key != getattr(self, '_last_map_for_stuck', None):
+        if script_lock:
+            self.steps_on_cur_tile = 0
+            self.last_tile = tile
+            self._last_map_for_stuck = map_key
+        elif map_key != getattr(self, '_last_map_for_stuck', None):
             self._last_map_for_stuck = map_key
             self.steps_on_cur_tile   = 0
             self.last_tile           = tile
@@ -546,17 +555,12 @@ class EpisodeStats:
         if not hasattr(self, 'explore_rewards_per_map'):
             self.explore_rewards_per_map = defaultdict(float)
 
-        # [FIX v27] Decaimento logarítmico de exploração + outdoor bonus
-        # Tiles novos neste episódio recebem reward, mas com decaimento
-        # baseado em quantas vezes já foram visitados historicamente.
-        # Tiles realmente inéditos → 100%. Tiles velhos → progressivamente menos.
+        # [FIX v27 / v31] Decaimento limitado com piso estacionário (explore_novelty_floor)
         if self.tile_visits[tile] == 1:
             n_persistent = self.persistent_tile_visits[tile]
-            # log1p(0)=0 → factor=1.0 (tile inédito: reward cheio)
-            # log1p(10)≈2.4 → factor≈0.29
-            # log1p(50)≈3.9 → factor≈0.20
-            # log1p(100)≈4.6 → factor≈0.18
-            novelty_factor = 1.0 / (1.0 + math.log1p(n_persistent))
+            novelty_factor = CFG.explore_novelty_floor + (1.0 - CFG.explore_novelty_floor) / (
+                1.0 + math.log1p(min(n_persistent, 50))
+            )
             base_r = CFG.explore_weight * novelty_factor
             # Bônus extra para tiles em mapas exteriores (routes com grama)
             if map_key[0] == 3:  # bank=3 = exterior/routes
@@ -587,6 +591,26 @@ class EpisodeStats:
 
         return base_r, is_new_map
 
+    def get_visited_grid(
+        self,
+        map_key: tuple[int, int],
+        px: int,
+        py: int,
+        grid_size: int = GRID_SIZE,
+    ) -> np.ndarray:
+        """Retorna matriz local grid_size x grid_size de visitas no episódio em [0.0, 1.0]."""
+        grid = np.zeros((grid_size, grid_size), dtype=np.float32)
+        radius = grid_size // 2
+        bank, mid = map_key
+        for row, dy in enumerate(range(-radius, radius + 1)):
+            ty = py + dy
+            for col, dx in enumerate(range(-radius, radius + 1)):
+                tx = px + dx
+                visits = self.tile_visits.get((bank, mid, tx, ty), 0)
+                if visits > 0:
+                    grid[row, col] = min(visits, 5) / 5.0
+        return grid
+
     def update_stuck(self, in_battle: bool = False, script_lock: bool = False) -> float:
         if self.steps_on_cur_tile >= CFG.stuck_threshold:
             self.total_stuck_steps += 1
@@ -600,12 +624,18 @@ class EpisodeStats:
         is_outdoor_route = bool(self.current_battle_map) and self.current_battle_map[0] == 3
         if is_outdoor_route:
             if has_parcel:
-                return 0.5 if n <= 1 else 0.0
+                if n <= 1:
+                    return 0.5
+                if n == 2:
+                    return 0.2
+                return 0.05
             if n <= 1:
                 return 1.0
             if n == 2:
+                return 0.5
+            if n == 3:
                 return 0.25
-            return 0.0
+            return 0.10
 
         # Em ginásios, dungeons (bank=1) e batalhas de história (Lab bank=4), nunca zera
         if n <= 1:
@@ -803,8 +833,8 @@ class EpisodeStats:
         level_cap = CFG.max_rewarded_level_base + max(0, int(badges)) * CFG.max_rewarded_level_per_badge
         rewarded_delta = max(0, min(current_level, level_cap) - self.max_level)
         reward = rewarded_delta * CFG.levelup_weight
-        if in_battle:
-            reward *= self.current_battle_fatigue(has_parcel=has_parcel)
+        if in_battle and has_parcel:
+            reward *= 0.5
         self.levels_gained += delta
         self.max_level      = current_level
         log.info(f"[Env {env_id}] Level up! +{delta} → total={current_level} (rew={reward:.1f}, cap={level_cap})")
@@ -823,12 +853,18 @@ class EpisodeStats:
         max_hp = RamReader.party_max_hp(info)
         reward = 0.0
         
-        # Only reward healing if party size hasn't changed
-        if cur_hp > self.last_party_hp and cur_party_size == self.party_size:
-            if self.last_party_hp > 0 and max_hp > 0:
-                heal_pct = (cur_hp - self.last_party_hp) / max(1, max_hp)
-                reward = heal_pct * CFG.heal_reward_scale
-                self.total_healing_rew += reward
+        # Only reward healing if party size hasn't changed and prior HP was genuinely low
+        if (
+            cur_hp > self.last_party_hp
+            and cur_party_size == self.party_size
+            and self.last_party_hp > 0
+            and max_hp > 0
+            and (self.last_party_hp / max_hp) < CFG.heal_min_prior_hp_ratio
+            and (cur_hp - self.last_party_hp) >= max(3, int(max_hp * 0.15))
+        ):
+            heal_pct = (cur_hp - self.last_party_hp) / max(1, max_hp)
+            reward = heal_pct * CFG.heal_reward_scale
+            self.total_healing_rew += reward
         
         self.party_size = cur_party_size
         return reward

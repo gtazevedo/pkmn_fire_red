@@ -311,11 +311,11 @@ class PokemonCallback(BaseCallback):
         return True
 
 
-def make_lr_schedule() -> callable:
-    lr = CFG.lr_start
-    def _constant_lr(progress_remaining: float) -> float:
-        return lr
-    return _constant_lr
+def make_lr_schedule(total_steps_ref: list[int]) -> callable:
+    def _linear_lr(progress_remaining: float) -> float:
+        frac = min(1.0, max(0.0, total_steps_ref[0] / float(max(CFG.lr_total_budget, 1))))
+        return float(CFG.lr_start + frac * (CFG.lr_end - CFG.lr_start))
+    return _linear_lr
 
 
 class Trainer:
@@ -378,7 +378,7 @@ class Trainer:
         return CallbackList([self._pokemon_cb, checkpoint_cb])
 
     def _load_or_create_model(self) -> RecurrentPPO:
-        lr_schedule = make_lr_schedule()
+        lr_schedule = make_lr_schedule(self._total_steps_ref)
 
         if os.path.exists(self._model_file):
             stamp_file  = self._model_file.replace(".zip", ".stamp")
@@ -389,6 +389,15 @@ class Trainer:
 
             if saved_stamp != CFG.config_stamp:
                 vecnorm_path = CFG.model_path + "_vecnorm.pkl"
+                if saved_stamp:
+                    backup_prefix = f"{CFG.model_path}_{saved_stamp}_backup"
+                    for src_p, dst_p in [
+                        (self._model_file, backup_prefix + ".zip"),
+                        (vecnorm_path, backup_prefix + "_vecnorm.pkl"),
+                        (stamp_file, backup_prefix + ".stamp"),
+                    ]:
+                        if os.path.exists(src_p) and not os.path.exists(dst_p):
+                            shutil.copy2(src_p, dst_p)
                 if upgrade_checkpoint_if_needed(
                     model_zip_path=self._model_file,
                     vecnorm_path=vecnorm_path,
@@ -429,14 +438,17 @@ class Trainer:
 
                 model.set_env(self._env)
                 model.learning_rate = lr_schedule
+                model.lr_schedule   = lr_schedule
                 model.batch_size    = CFG.batch_size
                 model.n_epochs      = CFG.n_epochs
                 model.ent_coef      = CFG.ent_coef
+                model.target_kl     = CFG.target_kl
                 log.info(
                     f"Resumed at step {model.num_timesteps:,} → "
                     f"phase {self._current_phase()}  "
-                    f"lr={CFG.lr_start}  batch={CFG.batch_size}  "
-                    f"epochs={CFG.n_epochs}  ent_coef={CFG.ent_coef}"
+                    f"lr={lr_schedule(1.0):.2e}  batch={CFG.batch_size}  "
+                    f"epochs={CFG.n_epochs}  ent_coef={CFG.ent_coef}  "
+                    f"target_kl={CFG.target_kl}"
                 )
                 return model
 
@@ -452,6 +464,7 @@ class Trainer:
             gamma=CFG.gamma,
             gae_lambda=CFG.gae_lambda,
             ent_coef=CFG.ent_coef,
+            target_kl=CFG.target_kl,
             tensorboard_log=CFG.tensorboard_log_dir,
         )
         return model
