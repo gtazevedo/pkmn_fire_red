@@ -112,9 +112,9 @@ def test_episode_stats_monotonic_events_and_reward_accumulator():
 def test_explore_rewards_per_map_resets_between_episodes():
     stats = EpisodeStats()
     stats.reset({})
-    map_key = (4, 0)  # interior cap = 50.0
+    map_key = (4, 0)  # interior cap = 35.0
     # Satura o cap de exploração no episódio 1
-    for x in range(30):
+    for x in range(60):
         stats.update_exploration((4, 0, x, 0), map_key, include_new_map_bonus=False)
     assert stats.explore_rewards_per_map[map_key] == CFG.map_explore_cap_interior
 

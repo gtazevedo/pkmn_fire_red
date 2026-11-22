@@ -127,8 +127,8 @@ class Config:
     # [FIX v24 / v30b] Zerado o time_penalty (Whiddy-Pure)
     time_penalty:    float = 0.0
     # [FIX v26 / v31] Exploração estacionária com piso de novidade >= 0.50
-    explore_weight:  float = 1.5
-    explore_weight_outdoor_bonus: float = 2.0
+    explore_weight:  float = 1.0
+    explore_weight_outdoor_bonus: float = 0.5
     explore_novelty_floor:        float = 0.50
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
@@ -148,11 +148,11 @@ class Config:
     battle_idle_penalty:  float = 0.0
     battle_idle_grace:    int   = 200   # mais carência para lidar com menus e gary
 
-    # [FIX v11-C / v31] Recompensas de combate reforçadas para vencer batalhas sem fobia
-    hp_pct_scale:         float = 10.0
+    # [FIX v11-C / v31 / v32c] Recompensas de combate reforçadas para vencer batalhas sem fobia
+    hp_pct_scale:         float = 20.0
     damage_weight:        float = 0.05  # fallback
 
-    victory_bonus:        float = 20.0
+    victory_bonus:        float = 50.0
     near_ko_bonus:        float = 5.0
     post_battle_grace:    int   = 200
 
@@ -193,17 +193,17 @@ class Config:
     farm_episode_penalty:     float = 0.0
 
     # First Strike reforçado e sujeito à fadiga suave por mapa
-    first_strike_bonus:       float = 6.0
+    first_strike_bonus:       float = 10.0
 
-    # [FIX v19 / v31] Dynamic Battle Curriculum: reativado até global_win_rate >= 20%
+    # [FIX v19 / v31 / v32c] Dynamic Battle Curriculum: reativado até global_win_rate >= 55%
     enable_battle_curriculum:             bool  = True
-    curriculum_win_rate_threshold:        float = 0.20
+    curriculum_win_rate_threshold:        float = 0.55
     max_potion_macro_attempts_per_battle: int   = 2
     potion_macro_cooldown_steps:          int   = 12
     max_tm_macro_attempts_per_episode:    int   = 2
     wasted_macro_penalty:                 float = -0.25
 
-    # [FIX v32] Captura, Poké Mart, efetividade de tipos e anti-fuga
+    # [FIX v32 / v32c] Captura, Poké Mart, efetividade de tipos e anti-fuga / anti-status spam
     capture_new_species_bonus:            float = 120.0
     pokeball_throw_bonus:                 float = 15.0
     max_capture_macro_attempts_per_battle: int  = 2
@@ -211,7 +211,9 @@ class Config:
     super_effective_bonus:                float = 3.0
     flee_trainer_penalty:                 float = -5.0
     flee_trainer_cursor_penalty:          float = -1.0
-    unnecessary_flee_penalty:             float = -10.0
+    flee_wild_cursor_penalty:             float = -1.5
+    status_move_spam_penalty:             float = -1.5
+    unnecessary_flee_penalty:             float = -25.0
 
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0
@@ -235,9 +237,9 @@ class Config:
     north_bonus_per_tile: float = 1.0
 
     # [FIX v17] Incentivos positivos para sair da casa (substitui v16 punições)
-    # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior é abundante
+    # Cap diferenciado: mapas interiores (bank=4) esgotam rápido, exterior equilibrado
     map_explore_cap_interior: float = 35.0   # bank=4 (quartos, casas) — esgota rápido
-    map_explore_cap_exterior: float = 2500.0  # bank!=4 exterior expandido para mais exploração
+    map_explore_cap_exterior: float = 600.0  # bank!=4 exterior equilibrado vs recompensas de combate
 
     outdoor_sustain_bonus: float = 0.0
 

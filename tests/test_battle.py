@@ -262,3 +262,148 @@ def test_trainer_run_blocked_with_script_lock_and_cut_dialogue_zero_bonus(tmp_pa
     _, rew_run_a, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
     assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("UP")))
     assert np.isclose(rew_run_a, CFG.time_penalty + CFG.flee_trainer_penalty)
+
+
+def test_wild_run_guard_status_spam_and_curriculum_recovery(tmp_path):
+    from src.advisor import RamAdvisor
+    from src.config import CFG, ActionSpace
+    from src.env import PokemonEnv
+    from src.progress import EpisodeStats, ProgressManager, RewardAccumulator
+    from src.strategist import Strategist
+    from src.vision import VisionEngine
+
+    ram = _make_full_ram()
+    sb1 = 0x025560
+    struct.pack_into("<iiI", ram, 262144 + 0x5040, 24, 24, 0x02031000)
+    struct.pack_into("<hh", ram, sb1, 12, 35)
+    struct.pack_into("<I", ram, RamReader._BATTLE_TYPE_FLAGS_OFFSET, 0x04)  # wild battle
+    ram[RamReader._PLAYER_PARTY_OFFSET + 84] = 7
+    struct.pack_into("<HH", ram, RamReader._PLAYER_PARTY_OFFSET + 86, 20, 24)
+    ram[RamReader._ENEMY_PARTY_OFFSET + 84] = 3
+    struct.pack_into("<HH", ram, RamReader._ENEMY_PARTY_OFFSET + 86, 16, 16)
+
+    b0 = RamReader._BATTLE_MONS_OFFSET
+    b1 = RamReader._BATTLE_MONS_OFFSET + RamReader._BATTLE_MON_SIZE
+    struct.pack_into("<H", ram, b0 + 0x00, 1)  # Bulbasaur
+    struct.pack_into("<4H", ram, b0 + 0x0C, 33, 45, 73, 0)  # Tackle, Growl, Leech Seed
+    ram[b0 + 0x21], ram[b0 + 0x22] = TYPE_GRASS, 3
+    ram[b0 + 0x24 : b0 + 0x28] = bytes([25, 40, 10, 0])
+    struct.pack_into("<H", ram, b0 + 0x28, 20)
+    struct.pack_into("<H", ram, b0 + 0x2C, 24)
+
+    struct.pack_into("<H", ram, b1 + 0x00, 16)  # Pidgey
+    ram[b1 + 0x21], ram[b1 + 0x22] = TYPE_NORMAL, TYPE_FLYING
+    struct.pack_into("<H", ram, b1 + 0x28, 16)
+    struct.pack_into("<H", ram, b1 + 0x2C, 16)
+
+    captured_actions = []
+
+    class StubRetroEnv:
+        def get_ram(self):
+            return ram
+
+    env = PokemonEnv.__new__(PokemonEnv)
+    env.env_id = 0
+    env._fixed_state_file = None
+    env._enable_stochasticity = False
+    env.env = StubRetroEnv()
+    env._total_steps_ref = [3_000_000]
+    env._cached_total_steps = 3_000_000
+    env._stats = EpisodeStats()
+    env._stats.reset({"p1_lvl": 7, "p1_hp": 20, "p1_maxhp": 24, "gMain_callback2": 0x08011101})
+    env._stats.was_in_battle = True
+    env._stats.last_enemy_hp = 16
+    env._stats.initial_enemy_hp = 16
+    env._stats.max_enemy_lvl_ever = 3
+    env._rewards = RewardAccumulator()
+    env._advisor = RamAdvisor()
+    env._strategist = Strategist(advisor=env._advisor, async_mode=False)
+    env._strategist._ollama_cooldown_until = 1e18
+    env._progress = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+    env._vision = VisionEngine()
+    env._episode_num = 1
+    env._farm_ratio_threshold = 0.90
+    env._map_history = []
+    env._last_map_transition_step = 0
+    env._explore_reward_per_map = {}
+    env._prev_map_key = (3, 19)
+    env._ever_left_interior = True
+    env._steps_interior_only = 0
+    env._battle_screenshot_saved = True
+    env._had_parcel_in_ep = False
+    env._had_teachy_tv_in_ep = False
+    env._battle_potion_attempts = 0
+    env._battle_potion_cooldown = 0
+    env._battle_capture_attempts = 0
+    env._battle_capture_cooldown = 0
+    env._episode_tm_attempts = 0
+    env._mart_buy_rewarded_in_ep = False
+    env._mart_buy_attempts = 0
+    env._owned_species_in_ep = {1}
+    env._prev_party_size_in_ep = 1
+    env._last_battle_best_slot = 0
+    env._last_battle_best_mult = 1.0
+    env._last_was_trainer_battle = False
+    env._battle_captured_this_battle = False
+    env._last_overworld_tile = ()
+    env._pending_event_save_flags = 0
+    env._steps_in_current_map = 5
+    env._last_overworld_move_action = None
+    env._last_script_lock = False
+
+    def fake_run_action(act):
+        captured_actions.append(np.array(act, copy=True))
+        p_hp = struct.unpack_from("<H", ram, RamReader._PLAYER_PARTY_OFFSET + 86)[0]
+        return np.zeros((160, 240, 3), dtype=np.uint8), np.zeros((84, 84, 1), dtype=np.uint8), {
+            "map_bank": 3, "map_id": 19, "gMain_callback2": 0x08011101,
+            "p1_lvl": 7, "p1_hp": p_hp, "p1_maxhp": 24, "e1_lvl": 3, "e1_hp": 16, "e1_maxhp": 16,
+        }
+
+    env._run_action = fake_run_action
+
+    # 1. Wild battle com HP >= 35%: bloqueia BAG+DOWN (-1.5), PKMN+RIGHT (-1.5) e RUN+A (-5.0)
+    what_will = _encode_tbl_bytes("what will sodiu do?")
+    ram[RamReader._BATTLE_STRING_OFFSET : RamReader._BATTLE_STRING_OFFSET + len(what_will)] = what_will
+
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 1
+    ram[RamReader._MOVE_CURSOR_OFFSET] = 0
+    # Recovery: estando em BAG(1), LEFT NAO pode ser bloqueado pelo Dynamic Curriculum (permite voltar a FIGHT)
+    env.step(ActionSpace.NAMES.index("LEFT"))
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("LEFT")))
+
+    # BAG(1) + DOWN bloqueado -> NO_OP e -1.5
+    _, rew_bd, _, _, _ = env.step(ActionSpace.NAMES.index("DOWN"))
+    assert np.all(captured_actions[-1] == ActionSpace.NO_OP)
+    assert np.isclose(rew_bd, CFG.time_penalty + CFG.flee_wild_cursor_penalty)
+
+    # PKMN(2) + RIGHT bloqueado -> NO_OP e -1.5
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 2
+    _, rew_pr, _, _, _ = env.step(ActionSpace.NAMES.index("RIGHT"))
+    assert np.all(captured_actions[-1] == ActionSpace.NO_OP)
+    assert np.isclose(rew_pr, CFG.time_penalty + CFG.flee_wild_cursor_penalty)
+
+    # RUN(3) + A bloqueado -> UP e -5.0
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 3
+    _, rew_ra, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("UP")))
+    assert np.isclose(rew_ra, CFG.time_penalty + CFG.flee_trainer_penalty)
+
+    # 2. Submenu de golpes ("typenormal"): A em Growl (slot 1, score<=0.05) paga -1.5; em Tackle (slot 0) paga 0.0
+    type_str = _encode_tbl_bytes("typenormal")
+    ram[RamReader._BATTLE_STRING_OFFSET : RamReader._BATTLE_STRING_OFFSET + len(type_str)] = type_str
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 0
+    ram[RamReader._MOVE_CURSOR_OFFSET] = 1
+    _, rew_growl, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
+    assert np.isclose(rew_growl, CFG.status_move_spam_penalty)
+
+    ram[RamReader._MOVE_CURSOR_OFFSET] = 0
+    _, rew_tackle, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
+    assert rew_tackle >= 0.0
+
+    # 3. Com HP baixo (<35%, 6/24 = 25%), RUN(3) + A eh permitido livremente
+    struct.pack_into("<HH", ram, RamReader._PLAYER_PARTY_OFFSET + 86, 6, 24)
+    ram[RamReader._BATTLE_STRING_OFFSET : RamReader._BATTLE_STRING_OFFSET + len(what_will)] = what_will
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 3
+    _, rew_low_hp_run, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("A")))
+    assert rew_low_hp_run == 0.0

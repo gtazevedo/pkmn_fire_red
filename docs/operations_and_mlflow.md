@@ -71,13 +71,13 @@ PYTHONPATH=. .venv/bin/python -m scripts.summary
 - Experimento principal no MLflow UI: `http://127.0.0.1:5000/#/experiments/1`
 - Model Registry (`PokemonFireRed-RecurrentPPO`): `http://127.0.0.1:5000/#/models/PokemonFireRed-RecurrentPPO`
 
-### Rodar a Suíte de Testes Unitários (`54` testes)
+### Rodar a Suíte de Testes Unitários (`55` testes)
 ```bash
 PYTHONPATH=. .venv/bin/pytest -v
 # ou: make test
 ```
 Cobre:
-- [tests/test_battle.py](../tests/test_battle.py): tabela de tipos Gen 3, `score_moves()`, economia (`get_money` XOR), bolso de Pokébolas, descriptografia de espécies Gen 3, `get_battle_observation` (`BATTLE_SIZE=12`) e `gDisplayedStringBattle`.
+- [tests/test_battle.py](../tests/test_battle.py): tabela de tipos Gen 3, `score_moves()`, economia (`get_money` XOR), bolso de Pokébolas, descriptografia de espécies Gen 3, `get_battle_observation` (`BATTLE_SIZE=12`), `gDisplayedStringBattle`, bloqueio de fuga em treinadores/selvagens, penalidade anti-status spam e recuperação de cursor do `Dynamic Battle Curriculum`.
 - [tests/test_reader.py](../tests/test_reader.py): ponteiros `SaveBlock1/2`, flags, itens criptografados, `collision_grid 9×9`, portas sólidas vs árvores, `is_script_locked`, `is_scripted_tutorial`, `has_teachy_tv`, `is_oak_in_lab`.
 - [tests/test_progress.py](../tests/test_progress.py): *Frontier Bias 50/30/20*, *Genesis Anchor*, monotonicidade de flags, `visited_grid`, piso estacionário, fadiga de batalhas, teto de nível, cura anti-farming e imunidade de `steps_on_cur_tile` durante `script_lock`.
 - [tests/test_strategist.py](../tests/test_strategist.py): decodificação TBL do `RamAdvisor`, `YES/NO` contextual (incluindo Mart), *VisionEngine*, schema JSON Ollama, guardrails 3B, anti-border-bounce, Rotas 22–25, guaritas da Viridian Forest `(15, 0)/(15, 2)` e Lab vazio (`0x02B`).

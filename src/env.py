@@ -211,10 +211,12 @@ class PokemonEnv(gym.Env):
         )
         for _ in range(n_walk):
             grid = RamReader.get_collision_grid(ram, info)
+            px_w, py_w = RamReader.get_player_coords(ram, info)
             safe_moves = [
                 act_idx
                 for act_idx, r_idx, c_idx in cardinal_offsets
                 if grid[r_idx, c_idx] == RamReader.TILE_WALKABLE
+                and not (origin_map == (3, 20) and py_w >= 75 and act_idx == 3)
             ]
             if not safe_moves:
                 break
@@ -250,13 +252,28 @@ class PokemonEnv(gym.Env):
         return info
 
     def _open_battle_bag(self) -> bool:
-        """Garante menu principal de batalha pronto, posiciona em BAG (slot 1) e confirma abertura (0x08107EE1)."""
-        # Sai do submenu de 4 golpes caso esteja aberto no momento da chamada
-        self._macro_step("B", hold=4, delay=8)
-        ram = self.env.get_ram()
-        battle_txt = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram))
+        """Aguarda menu principal de batalha pronto, posiciona em BAG (slot 1) e confirma abertura (0x08107EE1)."""
+        info: dict = {}
+        battle_txt = ""
+        for _ in range(32):
+            ram = self.env.get_ram()
+            battle_txt = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram))
+            if "what will" in battle_txt:
+                break
+            cb2_now = int(info.get("gMain_callback2", 0) or 0)
+            if cb2_now == 134571445:
+                return False
+            p_mon = RamReader.get_battle_mon(ram, 0)
+            if p_mon["max_hp"] > 0 and p_mon["hp"] == 0:
+                return False
+            info = self._macro_step("B", hold=4, delay=10)
+        else:
+            ram = self.env.get_ram()
+            battle_txt = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram))
+
         if "what will" not in battle_txt:
             return False
+        self._macro_step(None, hold=0, delay=12)
 
         main_cur, _ = RamReader.get_battle_cursors(ram)
         if main_cur in (2, 3):  # PKMN ou RUN -> subir para linha superior
@@ -353,6 +370,12 @@ class PokemonEnv(gym.Env):
         )
         ram = self.env.get_ram()
         px, py = RamReader.get_player_coords(ram)
+        for _ in range(15):
+            if abs(px - 4) + abs(py - 3) <= 10 and not RamReader.is_script_locked(ram):
+                break
+            self._macro_step(None, hold=0, delay=10)
+            ram = self.env.get_ram()
+            px, py = RamReader.get_player_coords(ram)
         if abs(px - 4) + abs(py - 3) > 10:
             return
         # Navega desviando de prateleiras até (4, 3) ao lado do balcão do atendente
@@ -428,6 +451,16 @@ class PokemonEnv(gym.Env):
                 self._macro_step(None, hold=0, delay=15)
             return False
 
+        def _cancel_mart_item() -> None:
+            # Aguarda abrir seletor de quantidade ('01') e pressiona B exatamente 1x para voltar à lista BUY
+            for _ in range(12):
+                t_w = RamAdvisor.decode_ram_text(self.env.get_ram()[138520:138776]).strip()
+                if t_w.isdigit() and len(t_w) == 2:
+                    self._macro_step("B", hold=5, delay=22)
+                    return
+                self._macro_step("A", hold=4, delay=14)
+            self._macro_step("B", hold=5, delay=22)
+
         for _ in range(5):
             if balls_rem <= 0 and pots_rem <= 0:
                 break
@@ -441,9 +474,11 @@ class PokemonEnv(gym.Env):
                 qty = min(pots_rem, RamReader.get_money(self.env.get_ram()) // 300)
                 if qty > 0 and _confirm_mart_purchase(qty):
                     pots_rem = 0
-            elif "how many" in txt or "would you like" in txt:
-                self._macro_step("B", hold=5, delay=18)   # Sai sem comprar item errado
-            self._macro_step("DOWN", hold=4, delay=12)
+            elif any(k in txt for k in ("how many", "would you like", "certainly")) or (
+                txt.isdigit() and len(txt) == 2
+            ):
+                _cancel_mart_item()
+            self._macro_step("DOWN", hold=5, delay=15)
 
         for _ in range(16):
             info = self._macro_step("B", hold=5, delay=20)
@@ -633,34 +668,68 @@ class PokemonEnv(gym.Env):
         action = ActionSpace.get(action_idx)
         action_name = ActionSpace.NAMES[action_idx]
 
-        # [FIX v19 / v32] Dynamic Battle Curriculum: libera D-pad quando melhor golpe está em slot > 0
-        if CFG.enable_battle_curriculum and getattr(self._stats, 'was_in_battle', False):
+        was_in_battle_pre = getattr(self._stats, "was_in_battle", False)
+        ram_pre = self.env.get_ram() if was_in_battle_pre else None
+
+        # [FIX v19 / v32 / v32c] Dynamic Battle Curriculum: libera D-pad quando melhor golpe está em slot > 0 ou cursor fora de (0,0)
+        if CFG.enable_battle_curriculum and was_in_battle_pre:
             if self._stats.global_win_rate() < CFG.curriculum_win_rate_threshold:
-                if action_name in ["START", "SELECT"] or (
-                    self._last_battle_best_slot == 0
-                    and action_name in ["UP", "DOWN", "LEFT", "RIGHT"]
-                ):
+                if action_name in ["START", "SELECT"]:
                     action = ActionSpace.NO_OP
+                elif self._last_battle_best_slot == 0 and action_name in ["UP", "DOWN", "LEFT", "RIGHT"]:
+                    mc_c, mvc_c = RamReader.get_battle_cursors(ram_pre) if ram_pre is not None else (0, 0)
+                    if mc_c == 0 and mvc_c == 0:
+                        action = ActionSpace.NO_OP
+                    elif action_name in ["DOWN", "RIGHT"]:
+                        action = ActionSpace.NO_OP
 
         # [FIX v22] TACTICAL_MACRO interception
         if action_name == "TACTICAL_MACRO":
             action = ActionSpace.NO_OP
 
-        trainer_flee_pen = 0.0
-        if getattr(self._stats, "was_in_battle", False) and action_name != "TACTICAL_MACRO":
-            ram_pre = self.env.get_ram()
-            if ram_pre is not None and RamReader.is_trainer_battle(ram_pre):
-                main_cur_pre, _ = RamReader.get_battle_cursors(ram_pre)
-                bt_pre = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram_pre))
-                if "what will" in bt_pre:
-                    if (main_cur_pre == 1 and action_name == "DOWN") or (
-                        main_cur_pre == 2 and action_name == "RIGHT"
-                    ):
-                        action = ActionSpace.NO_OP
-                        trainer_flee_pen += CFG.flee_trainer_cursor_penalty
-                    elif main_cur_pre == 3 and action_name == "A":
-                        action = ActionSpace.get(ActionSpace.NAMES.index("UP"))
-                        trainer_flee_pen += CFG.flee_trainer_penalty
+        battle_guard_pen = 0.0
+        if was_in_battle_pre and action_name != "TACTICAL_MACRO" and ram_pre is not None:
+            is_trainer_pre = RamReader.is_trainer_battle(ram_pre)
+            main_cur_pre, move_cur_pre = RamReader.get_battle_cursors(ram_pre)
+            bt_pre = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram_pre))
+            if is_trainer_pre:
+                block_run_pre = True
+            else:
+                pre_info: dict = {}
+                RamReader.enrich_info_from_ram(pre_info, ram_pre)
+                pre_max_hp = RamReader.party_max_hp(pre_info)
+                pre_hp_pct = (RamReader.party_hp(pre_info) / pre_max_hp) if pre_max_hp > 0 else 1.0
+                block_run_pre = (
+                    pre_hp_pct >= 0.35
+                    and not RamReader.has_oaks_parcel(ram_pre)
+                    and RamReader.badges(pre_info) == 0
+                    and 0 < RamReader.party_level(pre_info) < 16
+                )
+            if block_run_pre and "what will" in bt_pre:
+                cursor_pen = (
+                    CFG.flee_trainer_cursor_penalty
+                    if is_trainer_pre
+                    else CFG.flee_wild_cursor_penalty
+                )
+                if (main_cur_pre == 1 and action_name == "DOWN") or (
+                    main_cur_pre == 2 and action_name == "RIGHT"
+                ):
+                    action = ActionSpace.NO_OP
+                    battle_guard_pen += cursor_pen
+                elif main_cur_pre == 3 and action_name == "A":
+                    action = ActionSpace.get(ActionSpace.NAMES.index("UP"))
+                    battle_guard_pen += CFG.flee_trainer_penalty
+            elif bt_pre.startswith("type") and action_name == "A":
+                p_mon_pre = RamReader.get_battle_mon(ram_pre, 0)
+                e_mon_pre = RamReader.get_battle_mon(ram_pre, 1)
+                scores_pre, _, _ = score_moves(
+                    (p_mon_pre["type1"], p_mon_pre["type2"]),
+                    (e_mon_pre["type1"], e_mon_pre["type2"]),
+                    p_mon_pre["moves"],
+                    p_mon_pre["pp"],
+                )
+                if 0 <= move_cur_pre < 4 and scores_pre[move_cur_pre] <= 0.05 and max(scores_pre) > 0.10:
+                    battle_guard_pen += CFG.status_move_spam_penalty
 
         raw_frame, pooled, info  = self._run_action(action)
         self._last_raw_frame     = raw_frame
@@ -783,8 +852,7 @@ class PokemonEnv(gym.Env):
                 and mk_now in ((5, 3), (6, 0))
                 and RamReader.has_pokedex(ram_array)
                 and not RamReader.has_oaks_parcel(ram_array)
-                and money_now >= 200
-                and (potions < 2 or balls < 3)
+                and ((potions < 2 and money_now >= 300) or (balls < 3 and money_now >= 200))
                 and self._mart_buy_attempts < 2
             ):
                 self._mart_buy_attempts += 1
@@ -1186,8 +1254,8 @@ class PokemonEnv(gym.Env):
             se_bonus = CFG.super_effective_bonus * battle_fatigue
             step_reward += self._rewards.add("damage", se_bonus)
 
-        if trainer_flee_pen < 0.0:
-            step_reward += self._rewards.add("idle_pen", trainer_flee_pen)
+        if battle_guard_pen < 0.0:
+            step_reward += self._rewards.add("idle_pen", battle_guard_pen)
         elif _in_battle_now and RamReader.is_trainer_battle(ram_array) and action_name == "A":
             bt_now = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram_array))
             if "no running" in bt_now:
