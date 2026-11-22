@@ -167,6 +167,8 @@ class PokemonCallback(BaseCallback):
         self.logger.record("reward/from_stuck_pen",  m["reward_stuck"])
         self.logger.record("reward/from_time_pen",   m["reward_time_pen"])
         self.logger.record("reward/from_text",       m["reward_text"])
+        self.logger.record("reward/from_heal",       m.get("reward_heal", 0.0))
+        self.logger.record("reward/from_tactical",   m.get("reward_tactical", 0.0))
         self.logger.record("reward/from_strategist", m.get("reward_strategist", 0.0))
 
     def _record_game(self, m: dict) -> None:

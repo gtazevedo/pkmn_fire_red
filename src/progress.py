@@ -427,6 +427,7 @@ class EpisodeStats:
     # [FIX v18.3] Healing and max enemy level tracking
     total_healing_rew: float = 0.0
     party_size: int = 0
+    last_fainted_count: int = 0
     max_event_sum: int = 0
 
     # [FIX 6] Sentinel para level baseline
@@ -466,6 +467,10 @@ class EpisodeStats:
         self.near_ko_paid      = False
         self.last_party_hp     = RamReader.party_hp(info)
         self.party_size        = RamReader.party_size(info)
+        self.last_fainted_count = sum(
+            1 for i in range(1, 7)
+            if info.get(f"p{i}_maxhp", 0) > 0 and info.get(f"p{i}_hp", 0) == 0
+        )
         self.total_healing_rew = 0.0
         self.was_in_battle     = False
         self.last_badges       = RamReader.badges(info)
@@ -871,21 +876,28 @@ class EpisodeStats:
         cur_hp = RamReader.party_hp(info)
         cur_party_size = RamReader.party_size(info)
         max_hp = RamReader.party_max_hp(info)
+        cur_fainted = sum(
+            1 for i in range(1, 7)
+            if info.get(f"p{i}_maxhp", 0) > 0 and info.get(f"p{i}_hp", 0) == 0
+        )
         reward = 0.0
-        
-        # Only reward healing if party size hasn't changed and prior HP was genuinely low
+        had_low_hp = max_hp > 0 and (self.last_party_hp / max_hp) < CFG.heal_min_prior_hp_ratio
+        revived_fainted = self.last_fainted_count > 0 and cur_fainted < self.last_fainted_count
+
+        # Only reward healing if party size hasn't changed and prior HP/fainted condition was genuinely low
         if (
             cur_hp > self.last_party_hp
             and cur_party_size == self.party_size
             and self.last_party_hp > 0
             and max_hp > 0
-            and (self.last_party_hp / max_hp) < CFG.heal_min_prior_hp_ratio
+            and (had_low_hp or revived_fainted)
             and (cur_hp - self.last_party_hp) >= max(3, int(max_hp * 0.15))
         ):
             heal_pct = (cur_hp - self.last_party_hp) / max(1, max_hp)
             reward = heal_pct * CFG.heal_reward_scale
             self.total_healing_rew += reward
-        
+
+        self.last_fainted_count = cur_fainted
         self.party_size = cur_party_size
         return reward
 

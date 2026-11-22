@@ -98,6 +98,7 @@ class RamAdvisor:
         party_level: int = 1,
         map_key: tuple[int, int] = (-1, -1),
         party_hp_pct: float = 1.0,
+        has_fainted: bool = False,
     ) -> float:
         situation = self.SIT_EXPLORE
         decoded_text = ""
@@ -165,7 +166,7 @@ class RamAdvisor:
                 self.total_yes_no_steps += 1
                 is_starter_prompt = (party_level == 0 and map_key in ((-1, -1), (4, 3)))
                 is_heal_prompt = (
-                    party_hp_pct < 0.80
+                    (party_hp_pct < 0.90 or has_fainted)
                     and (
                         map_key in self.POKECENTER_MAPS
                         or any(kw in decoded_text for kw in self.HEAL_YES_NO_KEYWORDS)

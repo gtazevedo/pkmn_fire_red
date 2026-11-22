@@ -417,17 +417,31 @@ def test_heal_reward_anti_farming_prior_low_hp_guard():
     stats = EpisodeStats()
     stats.reset({"p1_lvl": 8, "p1_hp": 20, "p1_maxhp": 26})
 
-    # HP previo >= 40% (20/26 = 76.9%) NAO pode recompensar cura no Centro Pokemon
+    # HP previo >= 65% (20/26 = 76.9%) NAO pode recompensar cura no Centro Pokemon
     assert stats.update_heal_reward({"p1_hp": 26, "p1_maxhp": 26}) == 0.0
 
-    # HP previo < 40% (7/26 = 26.9%), ganho pequeno (<3 HP, ex levelup bump) tambem nao recompensa
+    # HP previo < 65% (7/26 = 26.9%), ganho pequeno (<3 HP, ex levelup bump) tambem nao recompensa
     stats.last_party_hp = 7
     assert stats.update_heal_reward({"p1_hp": 9, "p1_maxhp": 26}) == 0.0
 
-    # HP previo < 40% (7/26) e cura real para 26/26 recompensa proporcionalmente
+    # HP previo < 65% (7/26) e cura real para 26/26 recompensa proporcionalmente
     rew = stats.update_heal_reward({"p1_hp": 26, "p1_maxhp": 26})
     expected = ((26 - 7) / 26.0) * CFG.heal_reward_scale
     assert abs(rew - expected) < 1e-6
+
+    # 3 Pokemon feridos a 50% HP (< 65%) curados para 100% recebem 0.50 * heal_reward_scale
+    injured_3 = {"p1_lvl": 8, "p1_hp": 13, "p1_maxhp": 26, "p2_lvl": 5, "p2_hp": 9, "p2_maxhp": 18, "p3_lvl": 5, "p3_hp": 8, "p3_maxhp": 16}
+    full_3 = {"p1_lvl": 8, "p1_hp": 26, "p1_maxhp": 26, "p2_lvl": 5, "p2_hp": 18, "p2_maxhp": 18, "p3_lvl": 5, "p3_hp": 16, "p3_maxhp": 16}
+    stats.reset(injured_3)
+    rew_3 = stats.update_heal_reward(full_3)
+    assert abs(rew_3 - 0.50 * CFG.heal_reward_scale) < 1e-6
+
+    # 3 Pokemon com HP total >= 65% (42/57 = 73.7%), mas 1 desmaiado revivido no Centro -> tambem recompensa
+    fainted_one = {"p1_lvl": 8, "p1_hp": 0, "p1_maxhp": 15, "p2_lvl": 5, "p2_hp": 21, "p2_maxhp": 21, "p3_lvl": 5, "p3_hp": 21, "p3_maxhp": 21}
+    revived_all = {"p1_lvl": 8, "p1_hp": 15, "p1_maxhp": 15, "p2_lvl": 5, "p2_hp": 21, "p2_maxhp": 21, "p3_lvl": 5, "p3_hp": 21, "p3_maxhp": 21}
+    stats.reset(fainted_one)
+    rew_rev = stats.update_heal_reward(revived_all)
+    assert abs(rew_rev - ((15.0 / 57.0) * CFG.heal_reward_scale)) < 1e-6
 
 
 def test_cutscene_script_lock_prevents_false_stuck_and_antimem_config():

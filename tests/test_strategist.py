@@ -796,3 +796,117 @@ def test_strategist_battle_tactical_orientation_modes():
     assert np.isclose(strat.get_tactical_signal(), 0.5)
     assert strat.current_goal.priority == "heal" and "Flee" in strat.current_goal.sub_goal
     strat.close()
+
+
+def test_strategist_pokecenter_heal_routing_and_gary_individual_level_readiness(monkeypatch):
+    class FakeResp:
+        def __init__(self, payload: bytes):
+            self._buf = io.BytesIO(payload)
+        def read(self):
+            return self._buf.read()
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    # LLM mock tentando ejetar de volta para (3, 1) mesmo dentro do Centro (5, 4) com party ferida
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=None: FakeResp(
+            json.dumps({
+                "response": json.dumps({
+                    "sub_goal": "Exit Viridian building south to Viridian City",
+                    "target_map_bank": 3,
+                    "target_map_id": 1,
+                    "priority": "heal",
+                    "navigation_hint": "south",
+                })
+            }).encode("utf-8")
+        ),
+    )
+
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+
+    # 1. Party com 3 Pokemon todos machucados (HP ~48%) aciona needs_center_heal=True mesmo acima de 30%
+    hurt3 = {
+        "map_bank": 3, "map_id": 20, "player_x": 10, "player_y": 60, "badges": 0,
+        "p1_lvl": 9, "p1_hp": 14, "p1_maxhp": 29,
+        "p2_lvl": 4, "p2_hp": 8, "p2_maxhp": 17,
+        "p3_lvl": 4, "p3_hp": 8, "p3_maxhp": 17,
+    }
+    ctx_r2 = strat.build_context(hurt3, None, False, 124)
+    assert ctx_r2["needs_center_heal"] is True
+    g_r2 = strat._heuristic_goal(ctx_r2)
+    assert (g_r2.target_map_bank, g_r2.target_map_id) == (3, 1) and g_r2.priority == "heal" and g_r2.navigation_hint == "south"
+
+    # Roteamento coerente em Route 22, Route 1 N/S e Viridian City
+    g_r22_hurt = strat._heuristic_goal(strat.build_context({**hurt3, "map_id": 41}, None, False, 124))
+    assert (g_r22_hurt.target_map_bank, g_r22_hurt.target_map_id) == (3, 1) and g_r22_hurt.navigation_hint == "east"
+    g_r1_n = strat._heuristic_goal(strat.build_context({**hurt3, "map_id": 19, "player_y": 10}, None, False, 124))
+    assert (g_r1_n.target_map_bank, g_r1_n.target_map_id) == (3, 1) and g_r1_n.navigation_hint == "north"
+    g_r1_s = strat._heuristic_goal(strat.build_context({**hurt3, "map_id": 19, "player_y": 30}, None, False, 124))
+    assert (g_r1_s.target_map_bank, g_r1_s.target_map_id) == (3, 0) and g_r1_s.navigation_hint == "south"
+    g_vir_far_w = strat._heuristic_goal(strat.build_context({**hurt3, "map_id": 1, "player_x": 15, "player_y": 28}, None, False, 124))
+    assert (g_vir_far_w.target_map_bank, g_vir_far_w.target_map_id) == (5, 4) and g_vir_far_w.navigation_hint == "east"
+    g_vir_door = strat._heuristic_goal(strat.build_context({**hurt3, "map_id": 1, "player_x": 26, "player_y": 27}, None, False, 124))
+    assert (g_vir_door.target_map_bank, g_vir_door.target_map_id) == (5, 4) and g_vir_door.navigation_hint == "north"
+
+    # 2. Fluxo real de ida ao Centro (5,4): alinhamento + permanecer dentro ate curar + sair ao sul apos cura + repetivel
+    strat._ollama_cooldown_until = 1e18
+    strat.reset({**hurt3, "map_id": 1, "player_x": 26, "player_y": 27}, None)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (5, 4)
+    strat._ollama_cooldown_until = 0.0  # libera mock LLM ao entrar em (5,4)
+
+    b_enter1 = strat.update({**hurt3, "map_bank": 5, "map_id": 4, "player_x": 7, "player_y": 8}, None, False, 124)
+    assert np.isclose(b_enter1, CFG.strategist_goal_bonus)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (5, 4)
+    assert strat.current_goal.navigation_hint == "north"
+
+    # Caminha ate o balcao da Nurse Joy (y=4) -> muda para interact sem reiniciar para explore
+    strat.update({**hurt3, "map_bank": 5, "map_id": 4, "player_x": 7, "player_y": 4}, None, False, 124)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (5, 4)
+    assert strat.current_goal.navigation_hint == "interact"
+
+    # Se sair e voltar sem curar -> bounce nao paga bonus de novo
+    strat.update({**hurt3, "map_bank": 3, "map_id": 1, "player_x": 26, "player_y": 27}, None, False, 124)
+    b_bounce = strat.update({**hurt3, "map_bank": 5, "map_id": 4, "player_x": 7, "player_y": 8}, None, False, 124)
+    assert b_bounce == 0.0
+
+    # Apos curar 100%, Strategist vira imediatamente para sair ao sul -> (3, 1)
+    healed3 = {
+        "map_bank": 5, "map_id": 4, "player_x": 7, "player_y": 4, "badges": 0,
+        "p1_lvl": 9, "p1_hp": 29, "p1_maxhp": 29,
+        "p2_lvl": 4, "p2_hp": 17, "p2_maxhp": 17,
+        "p3_lvl": 4, "p3_hp": 17, "p3_maxhp": 17,
+    }
+    strat.update(healed3, None, False, 124)
+    assert (strat.current_goal.target_map_bank, strat.current_goal.target_map_id) == (3, 1)
+    assert strat.current_goal.navigation_hint == "south"
+    assert strat.current_goal.priority == "explore"
+
+    # Apos recuperar 100%, uma nova ida machucado a (5, 4) volta a pagar +15.0 de alinhamento
+    strat.update({**hurt3, "map_bank": 3, "map_id": 1, "player_x": 26, "player_y": 27}, None, False, 124)
+    b_enter2 = strat.update({**hurt3, "map_bank": 5, "map_id": 4, "player_x": 7, "player_y": 8}, None, False, 124)
+    assert np.isclose(b_enter2, CFG.strategist_goal_bonus)
+
+    # 3. Route 22 contra Rival Gary: 3 Pokemon Lv 7+3+3 (soma=13 >= 12, mas max_mon_level=7 < 11) -> manda treinar
+    underleveled_sum = {
+        "map_bank": 3, "map_id": 41, "player_x": 30, "player_y": 10, "badges": 0,
+        "p1_lvl": 7, "p1_hp": 24, "p1_maxhp": 24,
+        "p2_lvl": 3, "p2_hp": 14, "p2_maxhp": 14,
+        "p3_lvl": 3, "p3_hp": 14, "p3_maxhp": 14,
+    }
+    g_gary_prep = strat._heuristic_goal(strat.build_context(underleveled_sum, None, False, 124))
+    assert (g_gary_prep.target_map_bank, g_gary_prep.target_map_id) == (3, 1)
+    assert g_gary_prep.navigation_hint == "east" and "11" in g_gary_prep.sub_goal
+
+    # 4. RamAdvisor recomenda A para Nurse Joy se houver Pokémon desmaiado mesmo com HP total = 85%
+    adv = RamAdvisor()
+    ram_heal = _ram_with_dialogue("Would you like to rest your tired POKeMON? YES NO")
+    bonus_fainted = adv.update(
+        in_battle=False, script_lock=True, action_idx=adv.A_IDX,
+        ram_array=ram_heal, party_level=13, map_key=(5, 4), party_hp_pct=0.85, has_fainted=True,
+    )
+    assert np.isclose(bonus_fainted, adv.YES_NO_BONUS)
+    assert np.isclose(adv.get_embedding()[1], adv.A_IDX / 5.0)
+    strat.close()

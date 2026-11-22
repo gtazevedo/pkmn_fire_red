@@ -101,6 +101,7 @@ class PokemonEnv(gym.Env):
         self._last_macro_frame: Optional[np.ndarray] = None
         self._battle_switch_cooldown: int = 0
         self._smart_flee_rewarded_since_heal: bool = False
+        self._last_nav_hint: str = ""
 
     @property
     def max_steps(self) -> int:
@@ -701,6 +702,7 @@ class PokemonEnv(gym.Env):
         self._last_cb2                = int(info.get("gMain_callback2", 134571445) or 134571445)
         self._battle_switch_cooldown  = 0
         self._smart_flee_rewarded_since_heal = False
+        self._last_nav_hint           = self._strategist.current_goal.navigation_hint
 
         log.debug(
             f"[Env {self.env_id}] Reset ep={self._episode_num} — "
@@ -1044,6 +1046,10 @@ class PokemonEnv(gym.Env):
         step_reward += self._rewards.add("time_pen", CFG.time_penalty)
         party_max_hp_now = RamReader.party_max_hp(info)
         party_hp_pct_now = (RamReader.party_hp(info) / party_max_hp_now) if party_max_hp_now > 0 else 1.0
+        has_fainted_now = any(
+            info.get(f"p{i}_maxhp", 0) > 0 and info.get(f"p{i}_hp", 0) == 0
+            for i in range(1, 7)
+        )
         text_bonus      = self._advisor.update(
             _in_battle_now,
             _script_lock,
@@ -1052,6 +1058,7 @@ class PokemonEnv(gym.Env):
             party_level=RamReader.party_level(info),
             map_key=(RamReader.map_bank(info), RamReader.map_id(info)),
             party_hp_pct=party_hp_pct_now,
+            has_fainted=has_fainted_now,
         )
         if _in_scripted_tutorial:
             self._advisor.dialogue_stuck_steps = 0
@@ -1063,6 +1070,12 @@ class PokemonEnv(gym.Env):
         
         heal_bonus = self._stats.update_heal_reward(info)
         step_reward += self._rewards.add("heal", heal_bonus)
+        if heal_bonus > 0.0:
+            log.info(
+                f"[Env {self.env_id}] Party healed! +{heal_bonus:.1f} "
+                f"(hp={RamReader.party_hp(info)}/{RamReader.party_max_hp(info)}, "
+                f"map={(RamReader.map_bank(info), RamReader.map_id(info))})"
+            )
 
         event_bonus, total_flags = self._stats.update_events(ram_array)
         if event_bonus > 0:
@@ -1243,6 +1256,12 @@ class PokemonEnv(gym.Env):
                 )
 
             nav_hint = self._strategist.current_goal.navigation_hint
+            if nav_hint != getattr(self, "_last_nav_hint", nav_hint):
+                self._stats.x_min_episode = x
+                self._stats.x_max_episode = x
+                self._stats.y_min_episode = y
+                self._stats.y_max_episode = y
+            self._last_nav_hint = nav_hint
             if nav_hint == "south" and y > self._stats.y_max_episode:
                 delta = y - self._stats.y_max_episode
                 self._stats.y_max_episode = y
@@ -1261,7 +1280,7 @@ class PokemonEnv(gym.Env):
                 dir_r = delta * CFG.north_bonus_per_tile
                 step_reward += self._rewards.add("milestone", dir_r)
                 log.debug(f"[Env {self.env_id}] West progress! x={x} (+{dir_r:.1f})")
-            elif nav_hint not in ("south", "east", "west") and y < self._stats.y_min_episode:
+            elif nav_hint == "north" and y < self._stats.y_min_episode:
                 # North bonus: y decresce ao ir para norte no FireRed
                 delta = self._stats.y_min_episode - y
                 self._stats.y_min_episode = y

@@ -147,6 +147,8 @@ class Strategist:
         self._ollama_cooldown_until: float = 0.0
         self._tactical_signal: float = 0.0
         self._last_battle_phase: str = ""
+        self._last_needs_heal: Optional[bool] = None
+        self._heal_alignment_available: bool = True
 
     @property
     def current_goal(self) -> StrategicGoal:
@@ -156,6 +158,70 @@ class Strategist:
     def get_tactical_signal(self) -> float:
         with self._lock:
             return float(self._tactical_signal)
+
+    @staticmethod
+    def _extract_party_metrics(info: dict, ram_array) -> dict:
+        slots = RamReader.get_party_slots(ram_array) if ram_array is not None else []
+        if not slots:
+            for i in range(1, 7):
+                maxhp = int(info.get(f"p{i}_maxhp", 0) or 0)
+                if maxhp > 0:
+                    slots.append({
+                        "slot": i - 1,
+                        "level": int(info.get(f"p{i}_lvl", 0) or 0),
+                        "hp": int(info.get(f"p{i}_hp", 0) or 0),
+                        "max_hp": maxhp,
+                    })
+        party_hp = RamReader.party_hp(info)
+        party_max_hp = RamReader.party_max_hp(info)
+        party_hp_pct = (party_hp / party_max_hp) if party_max_hp > 0 else 1.0
+        party_level = RamReader.party_level(info)
+        if not slots:
+            return {
+                "party_size": RamReader.party_size(info),
+                "max_mon_level": party_level,
+                "lead_level": party_level,
+                "lead_hp_pct": round(party_hp_pct, 3),
+                "fainted_count": 0,
+                "injured_count": 0,
+            }
+        lead = slots[0]
+        lead_hp_pct = round(lead["hp"] / float(max(lead["max_hp"], 1)), 3)
+        return {
+            "party_size": len(slots),
+            "max_mon_level": max(int(s["level"]) for s in slots),
+            "lead_level": int(lead["level"]),
+            "lead_hp_pct": lead_hp_pct,
+            "fainted_count": sum(1 for s in slots if int(s["hp"]) <= 0),
+            "injured_count": sum(1 for s in slots if int(s["hp"]) < int(s["max_hp"]) * 0.60),
+        }
+
+    @staticmethod
+    def _compute_needs_center_heal(
+        map_bank: int,
+        map_id: int,
+        party_hp: int,
+        party_hp_pct: float,
+        party_size: int,
+        lead_hp_pct: float,
+        fainted_count: int,
+        injured_count: int,
+        has_parcel: bool,
+    ) -> bool:
+        if party_hp <= 0 or party_size <= 0:
+            return False
+        if (map_bank, map_id) in ((5, 4), (6, 1)):
+            return party_hp_pct < 0.90 or fainted_count >= 1
+        if (map_bank, map_id) == (4, 0):
+            return party_hp_pct < 0.60 or fainted_count >= 1
+        if has_parcel:
+            return party_hp_pct < 0.35 or fainted_count >= 1
+        return (
+            party_hp_pct < 0.55
+            or fainted_count >= 1
+            or lead_hp_pct < 0.45
+            or (party_size >= 2 and injured_count >= 2)
+        )
 
     @staticmethod
     def _classify_tactical_phase(context: dict) -> tuple[str, float]:
@@ -253,6 +319,18 @@ class Strategist:
 
         last_dialogue = self._advisor.last_decoded_text.strip() if self._advisor else ""
         recent_dialogues = list(self._advisor.recent_dialogues) if self._advisor else []
+        pm = self._extract_party_metrics(info, ram_array)
+        needs_center_heal = self._compute_needs_center_heal(
+            map_bank=map_bank,
+            map_id=map_id,
+            party_hp=party_hp,
+            party_hp_pct=party_hp_pct,
+            party_size=int(pm["party_size"]),
+            lead_hp_pct=float(pm["lead_hp_pct"]),
+            fainted_count=int(pm["fainted_count"]),
+            injured_count=int(pm["injured_count"]),
+            has_parcel=has_parcel,
+        )
 
         return {
             "map_bank": map_bank,
@@ -260,6 +338,13 @@ class Strategist:
             "player_x": px,
             "player_y": py,
             "party_level": party_level,
+            "party_size": int(pm["party_size"]),
+            "max_mon_level": int(pm["max_mon_level"]),
+            "lead_level": int(pm["lead_level"]),
+            "lead_hp_pct": float(pm["lead_hp_pct"]),
+            "fainted_count": int(pm["fainted_count"]),
+            "injured_count": int(pm["injured_count"]),
+            "needs_center_heal": needs_center_heal,
             "party_hp": party_hp,
             "party_max_hp": party_max_hp,
             "party_hp_pct": round(party_hp_pct, 3),
@@ -304,18 +389,24 @@ class Strategist:
             "You are a Pokemon FireRed strategic & tactical planner. Output one JSON object.\n"
             "Rules:\n"
             "- sub_goal must be a concise English action phrase (never \"none\").\n"
-            "- priority: \"heal\" when active_fainted/low HP (<0.35), needing Potion, or fleeing wild battle at critical HP; "
+            "- priority: \"heal\" when needs_center_heal=True, active_fainted/low HP, needing Potion, or fleeing wild battle at critical HP; "
             "\"battle_gym\" only for Gym/Elite4; \"use_hm\" for HM obstacles; else \"explore\".\n"
+            "- Center & Preparation: when needs_center_heal=True (e.g. multiple injured Pokemon, fainted party member, or low HP), route to ViridianCenter (5,4) or PewterCenter (6,1) and stay inside until HP >= 90% and fainted == 0 before exiting south.\n"
+            "- Rival Gary (Route 22 has Pidgey Lv 9 + starter): do NOT fight Gary until max_mon_lvl >= 11, lead_lvl >= 10, fainted == 0, and hp_pct >= 0.75; otherwise train on Route 1/Route 2 or heal in Viridian first.\n"
             "- Tactics: switch to alive backup on faint; use Potion when active_hp_pct < 0.50; throw Poke Ball if can_capture=True; "
             "flee wild battle if active_hp_pct < 0.35 and potions == 0; buy Potions/Balls in Mart when low and money >= 300.\n"
             "- Keep target_map_bank and target_map_id aligned with Kanto maps or the baseline unless low HP or dialogue requires overriding.\n"
             "- Kanto maps (bank,id): Pallet=(3,0), RedHouse=(4,0), OakLab=(4,3), "
             "Route1=(3,19), Viridian=(3,1), ViridianMart=(5,3), ViridianCenter=(5,4), "
-            "Route2=(3,20), ViridianGateS=(15,0), ViridianForest=(1,0), ViridianGateN=(15,2), Pewter=(3,2), PewterGym=(6,2), Route22=(3,41).\n"
+            "Route2=(3,20), ViridianGateS=(15,0), ViridianForest=(1,0), ViridianGateN=(15,2), Pewter=(3,2), PewterCenter=(6,1), PewterGym=(6,2), Route22=(3,41).\n"
             f"State: map_bank={context['map_bank']}, map_id={context['map_id']}, "
             f"pos=({context['player_x']},{context['player_y']}), "
-            f"party_lvl={context['party_level']}, hp_pct={context['party_hp_pct']}, "
+            f"party_lvl={context['party_level']}, party_size={context.get('party_size', 1)}, "
+            f"max_mon_lvl={context.get('max_mon_level', context['party_level'])}, lead_lvl={context.get('lead_level', context['party_level'])}, "
+            f"hp_pct={context['party_hp_pct']}, lead_hp_pct={context.get('lead_hp_pct', context['party_hp_pct'])}, "
             f"active_hp_pct={context.get('active_hp_pct', context['party_hp_pct'])}, "
+            f"fainted={context.get('fainted_count', 0)}, injured={context.get('injured_count', 0)}, "
+            f"needs_center_heal={context.get('needs_center_heal', False)}, "
             f"badges={context['badges']}, flags={context['event_flags']}, "
             f"has_oaks_parcel={context['has_oaks_parcel']}, has_pokedex={context.get('has_pokedex', False)}, "
             f"potions={context['potions']}, pokeballs={context['pokeballs']}, money={context['money']}, "
@@ -371,6 +462,167 @@ class Strategist:
             navigation_hint=nav_hint,
         )
 
+    @staticmethod
+    def _heal_route_goal(context: dict) -> StrategicGoal:
+        bank = int(context.get("map_bank", 0))
+        mid = int(context.get("map_id", 0))
+        px = int(context.get("player_x", 0))
+        py = int(context.get("player_y", 0))
+
+        if (bank, mid) in ((5, 4), (6, 1)):
+            if py > 4:
+                return StrategicGoal(
+                    sub_goal="Walk north to Nurse Joy counter in Pokemon Center to heal party",
+                    target_map_bank=bank,
+                    target_map_id=mid,
+                    priority="heal",
+                    navigation_hint="north",
+                )
+            return StrategicGoal(
+                sub_goal="Talk to Nurse Joy to heal injured party",
+                target_map_bank=bank,
+                target_map_id=mid,
+                priority="heal",
+                navigation_hint="interact",
+            )
+        if (bank, mid) == (4, 0):
+            return StrategicGoal(
+                sub_goal="Talk to Mom in Red's House to heal injured party",
+                target_map_bank=4,
+                target_map_id=0,
+                priority="heal",
+                navigation_hint="interact",
+            )
+        if (bank, mid) == (3, 1):
+            hint = "south" if py < 25 else ("west" if px > 28 else ("east" if px < 24 else "north"))
+            return StrategicGoal(
+                sub_goal="Enter Viridian Pokemon Center to heal injured party",
+                target_map_bank=5,
+                target_map_id=4,
+                priority="heal",
+                navigation_hint=hint,
+            )
+        if (bank, mid) == (3, 2):
+            hint = "south" if py < 24 else ("west" if px > 20 else ("east" if px < 14 else "north"))
+            return StrategicGoal(
+                sub_goal="Enter Pewter Pokemon Center to heal injured party",
+                target_map_bank=6,
+                target_map_id=1,
+                priority="heal",
+                navigation_hint=hint,
+            )
+        if (bank, mid) == (3, 20):
+            if py >= 45:
+                return StrategicGoal(
+                    sub_goal="Return south from Route 2 to Viridian Pokemon Center to heal party",
+                    target_map_bank=3,
+                    target_map_id=1,
+                    priority="heal",
+                    navigation_hint="south",
+                )
+            return StrategicGoal(
+                sub_goal="Continue north on Route 2 to Pewter Pokemon Center to heal party",
+                target_map_bank=3,
+                target_map_id=2,
+                priority="heal",
+                navigation_hint="north",
+            )
+        if (bank, mid) == (3, 41):
+            return StrategicGoal(
+                sub_goal="Retreat east from Route 22 to Viridian Pokemon Center to heal party",
+                target_map_bank=3,
+                target_map_id=1,
+                priority="heal",
+                navigation_hint="east",
+            )
+        if (bank, mid) == (3, 19):
+            if py <= 22:
+                return StrategicGoal(
+                    sub_goal="Head north on Route 1 to Viridian Pokemon Center to heal party",
+                    target_map_bank=3,
+                    target_map_id=1,
+                    priority="heal",
+                    navigation_hint="north",
+                )
+            return StrategicGoal(
+                sub_goal="Return south on Route 1 to Pallet Town to heal injured party",
+                target_map_bank=3,
+                target_map_id=0,
+                priority="heal",
+                navigation_hint="south",
+            )
+        if (bank, mid) == (3, 0):
+            return StrategicGoal(
+                sub_goal="Enter Red's House to heal injured party",
+                target_map_bank=4,
+                target_map_id=0,
+                priority="heal",
+                navigation_hint="north",
+            )
+        if (bank, mid) == (15, 0):
+            return StrategicGoal(
+                sub_goal="Exit Viridian Forest South Gate toward Viridian Pokemon Center to heal",
+                target_map_bank=3,
+                target_map_id=20,
+                priority="heal",
+                navigation_hint="south",
+            )
+        if (bank, mid) == (1, 0):
+            if py < 28:
+                return StrategicGoal(
+                    sub_goal="Exit Viridian Forest north toward Pewter Pokemon Center to heal",
+                    target_map_bank=15,
+                    target_map_id=2,
+                    priority="heal",
+                    navigation_hint="north",
+                )
+            return StrategicGoal(
+                sub_goal="Retreat south from Viridian Forest toward Viridian Pokemon Center to heal",
+                target_map_bank=15,
+                target_map_id=0,
+                priority="heal",
+                navigation_hint="south",
+            )
+        if (bank, mid) == (15, 2):
+            return StrategicGoal(
+                sub_goal="Exit Viridian Forest North Gate toward Pewter Pokemon Center to heal",
+                target_map_bank=3,
+                target_map_id=20,
+                priority="heal",
+                navigation_hint="north",
+            )
+        if bank == 5:
+            return StrategicGoal(
+                sub_goal="Exit Viridian building south to reach Pokemon Center",
+                target_map_bank=3,
+                target_map_id=1,
+                priority="heal",
+                navigation_hint="south",
+            )
+        if bank == 6:
+            return StrategicGoal(
+                sub_goal="Exit Pewter building south to reach Pokemon Center",
+                target_map_bank=3,
+                target_map_id=2,
+                priority="heal",
+                navigation_hint="south",
+            )
+        if bank == 4:
+            return StrategicGoal(
+                sub_goal="Exit building south to heal injured party",
+                target_map_bank=3,
+                target_map_id=0,
+                priority="heal",
+                navigation_hint="south",
+            )
+        return StrategicGoal(
+            sub_goal="Return to nearest Pokemon Center to heal injured party",
+            target_map_bank=5,
+            target_map_id=4,
+            priority="heal",
+            navigation_hint="south",
+        )
+
     def _heuristic_goal(self, context: dict) -> StrategicGoal:
         bank = context["map_bank"]
         mid = context["map_id"]
@@ -423,17 +675,8 @@ class Strategist:
                 navigation_hint="interact",
             )
 
-        if party_hp > 0 and hp_pct < 0.30:
-            heal_bank, heal_id = (
-                (4, 0) if (bank == 4 or (bank == 3 and mid in (0, 19))) else (5, 4)
-            )
-            return StrategicGoal(
-                sub_goal="Heal injured party at Pokemon Center",
-                target_map_bank=heal_bank,
-                target_map_id=heal_id,
-                priority="heal",
-                navigation_hint="interact",
-            )
+        if context.get("needs_center_heal", False):
+            return self._heal_route_goal(context)
 
         if "yes" in last_dialog and "no" in last_dialog:
             return StrategicGoal(
@@ -635,6 +878,9 @@ class Strategist:
                 navigation_hint="north",
             )
 
+        max_mon_lvl = int(context.get("max_mon_level", party_lvl))
+        lead_lvl = int(context.get("lead_level", max_mon_lvl))
+
         if (bank, mid) == (3, 41) and context.get("badges", 0) >= 8:
             return StrategicGoal(
                 sub_goal="Take Route 22 west toward Victory Road gate",
@@ -643,13 +889,45 @@ class Strategist:
                 priority="explore",
                 navigation_hint="west",
             )
-        if (bank, mid) == (3, 41) and context.get("badges", 0) < 8 and party_lvl < 12:
+        if (bank, mid) == (3, 41) and context.get("badges", 0) < 8 and (max_mon_lvl < 11 or lead_lvl < 10 or hp_pct < 0.75):
             return StrategicGoal(
-                sub_goal="Train wild Pokemon and return east from Route 22 to Viridian City before fighting Rival",
+                sub_goal="Train lead Pokemon to Lv 11+ on Route 1/Route 2 before fighting Rival Gary (Pidgey Lv 9); return east to Viridian City",
                 target_map_bank=3,
                 target_map_id=1,
                 priority="explore",
                 navigation_hint="east",
+            )
+
+        if (
+            (bank, mid) == (3, 1)
+            and context.get("has_pokedex", False)
+            and context.get("badges", 0) == 0
+            and not has_parcel
+            and max_mon_lvl < 11
+        ):
+            return StrategicGoal(
+                sub_goal="Advance north to Route 2 to train lead Pokemon to Lv 11+ before Rival Gary / Pewter Gym",
+                target_map_bank=3,
+                target_map_id=20,
+                priority="explore",
+                navigation_hint="north",
+            )
+
+        if (bank, mid) == (3, 2) and context.get("badges", 0) == 0:
+            if max_mon_lvl < 13:
+                return StrategicGoal(
+                    sub_goal="Train lead Pokemon to Lv 13+ on Route 2 before challenging Brock at Pewter Gym",
+                    target_map_bank=3,
+                    target_map_id=20,
+                    priority="explore",
+                    navigation_hint="south",
+                )
+            return StrategicGoal(
+                sub_goal="Challenge Brock at Pewter Gym",
+                target_map_bank=6,
+                target_map_id=2,
+                priority="battle_gym",
+                navigation_hint="north",
             )
 
         if (bank, mid) in KANTO_PROGRESSION_GRAPH:
@@ -713,19 +991,20 @@ class Strategist:
         fallback_goal: Optional[StrategicGoal] = None,
         in_battle: bool = False,
         hp_pct: float = 1.0,
+        needs_center_heal: bool = False,
     ) -> Optional[StrategicGoal]:
         goal = self._call_ollama(prompt)
         if goal is not None:
             if fallback_goal is not None:
-                if goal.priority == "heal" and hp_pct >= 0.45 and fallback_goal.priority != "heal":
+                if goal.priority == "heal" and not needs_center_heal and hp_pct >= 0.65 and fallback_goal.priority != "heal":
                     goal.priority = fallback_goal.priority
 
                 goal_target = (goal.target_map_bank, goal.target_map_id)
                 fallback_target = (fallback_goal.target_map_bank, fallback_goal.target_map_id)
                 valid_heal_override = (
                     goal.priority == "heal"
-                    and hp_pct < 0.35
-                    and goal_target in ((4, 0), (5, 4))
+                    and (needs_center_heal or hp_pct < 0.55)
+                    and goal_target in ((4, 0), (5, 4), (6, 1), (3, 1), (3, 2), (3, 0))
                 )
 
                 if goal.target_map_bank <= 0 and fallback_goal.target_map_bank > 0:
@@ -736,6 +1015,16 @@ class Strategist:
                     goal.target_map_bank = fallback_goal.target_map_bank
                     goal.target_map_id = fallback_goal.target_map_id
                     goal.navigation_hint = fallback_goal.navigation_hint
+                elif (
+                    fallback_goal.priority == "heal"
+                    and not in_battle
+                    and issued_on_map in ((5, 4), (6, 1), (4, 0))
+                    and goal_target != issued_on_map
+                ):
+                    goal.target_map_bank = fallback_goal.target_map_bank
+                    goal.target_map_id = fallback_goal.target_map_id
+                    goal.navigation_hint = fallback_goal.navigation_hint
+                    goal.sub_goal = fallback_goal.sub_goal
                 elif (
                     not in_battle
                     and fallback_target != issued_on_map
@@ -796,18 +1085,53 @@ class Strategist:
             and not RamReader.is_oak_in_lab(ram_array)
         )
 
+        party_hp_now = RamReader.party_hp(info)
+        party_max_now = RamReader.party_max_hp(info)
+        party_hp_pct_now = (party_hp_now / party_max_now) if party_max_now > 0 else 1.0
+        has_parcel_now = RamReader.has_oaks_parcel(ram_array) if ram_array is not None else False
+        pm_now = self._extract_party_metrics(info, ram_array)
+        needs_heal_now = (
+            not in_battle
+            and self._compute_needs_center_heal(
+                map_bank=map_key[0],
+                map_id=map_key[1],
+                party_hp=party_hp_now,
+                party_hp_pct=party_hp_pct_now,
+                party_size=int(pm_now["party_size"]),
+                lead_hp_pct=float(pm_now["lead_hp_pct"]),
+                fainted_count=int(pm_now["fainted_count"]),
+                injured_count=int(pm_now["injured_count"]),
+                has_parcel=has_parcel_now,
+            )
+        )
+        if party_hp_now > 0 and party_hp_pct_now >= 0.90 and int(pm_now["fainted_count"]) == 0:
+            self._heal_alignment_available = True
+        health_state_changed = (
+            self._last_needs_heal is not None and needs_heal_now != self._last_needs_heal
+        )
+
         alignment_bonus = 0.0
         with self._lock:
             cur_goal = self._current_goal
+        is_heal_center_arrival = (
+            cur_goal.priority == "heal"
+            and map_key in ((5, 4), (6, 1), (4, 0))
+            and self._heal_alignment_available
+        )
         if (
             cur_goal.issued_on_map != (-1, -1)
             and map_key != cur_goal.issued_on_map
             and (cur_goal.target_map_bank, cur_goal.target_map_id) == map_key
-            and map_key not in self._rewarded_targets
-            and map_key not in self._visited_maps_ep
+            and (
+                (map_key not in self._rewarded_targets and map_key not in self._visited_maps_ep)
+                or is_heal_center_arrival
+            )
             and not empty_oak_lab_entry
         ):
-            self._rewarded_targets.add(map_key)
+            if is_heal_center_arrival:
+                self._heal_alignment_available = False
+            else:
+                self._rewarded_targets.add(map_key)
             self.goal_alignments += 1
             alignment_bonus = float(CFG.strategist_goal_bonus)
             self.total_alignment_bonus += alignment_bonus
@@ -823,15 +1147,17 @@ class Strategist:
         else:
             self._steps_on_current_map += 1
 
-        has_parcel_now = RamReader.has_oaks_parcel(ram_array) if ram_array is not None else False
         parcel_changed = (
             self._last_has_parcel is not None and has_parcel_now != self._last_has_parcel
         )
+        in_pokecenter_heal = needs_heal_now and map_key in ((5, 4), (6, 1))
         need_context = (
             self.should_trigger(map_key, total_flags, in_battle)
             or parcel_changed
+            or health_state_changed
             or in_battle
             or map_key in ((5, 3), (6, 0))
+            or in_pokecenter_heal
             or self._last_battle_phase not in ("", "overworld")
         )
         context = self.build_context(info, ram_array, in_battle, total_flags) if need_context else None
@@ -844,7 +1170,7 @@ class Strategist:
         with self._lock:
             self._tactical_signal = sig_now
 
-        if self.should_trigger(map_key, total_flags, in_battle) or parcel_changed or phase_changed:
+        if self.should_trigger(map_key, total_flags, in_battle) or parcel_changed or phase_changed or health_state_changed:
             if context is None:
                 context = self.build_context(info, ram_array, in_battle, total_flags)
             fallback = self._heuristic_goal(context)
@@ -870,10 +1196,11 @@ class Strategist:
             if not battle_only_trigger:
                 prompt = self.build_prompt(context, suggested_goal=fallback)
                 hp_pct = float(context.get("party_hp_pct", 1.0))
+                needs_center = bool(context.get("needs_center_heal", False))
                 if self.async_mode and self._executor is not None:
                     if self._pending_future is None or self._pending_future.done():
                         self._pending_future = self._executor.submit(
-                            self._query_and_apply, prompt, map_key, fallback, in_battle, hp_pct
+                            self._query_and_apply, prompt, map_key, fallback, in_battle, hp_pct, needs_center
                         )
                 else:
                     self._query_and_apply(
@@ -882,13 +1209,29 @@ class Strategist:
                         fallback_goal=fallback,
                         in_battle=in_battle,
                         hp_pct=hp_pct,
+                        needs_center_heal=needs_center,
                     )
+        elif in_pokecenter_heal and context is not None:
+            pc_goal = self._heal_route_goal(context)
+            pc_goal.issued_on_map = map_key
+            with self._lock:
+                if (
+                    pc_goal.target_map_bank,
+                    pc_goal.target_map_id,
+                    pc_goal.navigation_hint,
+                ) != (
+                    self._current_goal.target_map_bank,
+                    self._current_goal.target_map_id,
+                    self._current_goal.navigation_hint,
+                ):
+                    self._current_goal = pc_goal
 
         self._last_map_key = map_key
         self._last_flags = total_flags
         self._last_in_battle = in_battle
         self._last_has_parcel = has_parcel_now
         self._last_battle_phase = phase_now
+        self._last_needs_heal = needs_heal_now
         return alignment_bonus
 
     def get_goal_embedding(self) -> np.ndarray:
@@ -903,6 +1246,7 @@ class Strategist:
         self._steps_on_current_map = 0
         self._rewarded_targets.clear()
         self._visited_maps_ep.clear()
+        self._heal_alignment_available = True
         self.queries_count = 0
         self.llm_success_count = 0
         self.goal_alignments = 0
@@ -919,10 +1263,12 @@ class Strategist:
                 phase0, sig0 = self._classify_tactical_phase(context)
                 self._last_battle_phase = phase0
                 self._tactical_signal = sig0
+                self._last_needs_heal = bool(context.get("needs_center_heal", False))
             else:
                 self._current_goal = StrategicGoal()
                 self._last_battle_phase = ""
                 self._tactical_signal = 0.0
+                self._last_needs_heal = None
 
     def stats_dict(self) -> dict:
         return {

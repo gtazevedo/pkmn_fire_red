@@ -71,16 +71,16 @@ PYTHONPATH=. .venv/bin/python -m scripts.summary
 - Experimento principal no MLflow UI: `http://127.0.0.1:5000/#/experiments/1`
 - Model Registry (`PokemonFireRed-RecurrentPPO`): `http://127.0.0.1:5000/#/models/PokemonFireRed-RecurrentPPO`
 
-### Rodar a Suíte de Testes Unitários (`57` testes)
+### Rodar a Suíte de Testes Unitários (`58` testes)
 ```bash
 PYTHONPATH=. .venv/bin/pytest -v
 # ou: make test
 ```
 Cobre:
-- [tests/test_battle.py](../tests/test_battle.py): tabela de tipos Gen 3, `score_moves()`, economia (`get_money` XOR), bolso de Pokébolas, descriptografia de espécies Gen 3, `get_battle_observation` (`BATTLE_SIZE=12`), `gDisplayedStringBattle`, bloqueio de fuga em treinadores/selvagens, penalidade anti-status spam e recuperação de cursor do `Dynamic Battle Curriculum`.
+- [tests/test_battle.py](../tests/test_battle.py): tabela de tipos Gen 3, `score_moves()`, economia (`get_money` XOR), bolso de Pokébolas, descriptografia de espécies Gen 3, `get_battle_observation` (`BATTLE_SIZE=12`), `gDisplayedStringBattle`, bloqueio de fuga em treinadores, liberdade tática em batalhas selvagens, penalidade anti-status spam e recuperação de cursor do `Dynamic Battle Curriculum`.
 - [tests/test_reader.py](../tests/test_reader.py): ponteiros `SaveBlock1/2`, flags, itens criptografados, `collision_grid 9×9`, portas sólidas vs árvores, `is_script_locked`, `is_scripted_tutorial`, `has_teachy_tv`, `is_oak_in_lab`.
-- [tests/test_progress.py](../tests/test_progress.py): *Frontier Bias 50/30/20*, *Genesis Anchor*, monotonicidade de flags, `visited_grid`, piso estacionário, fadiga de batalhas, teto de nível, cura anti-farming e imunidade de `steps_on_cur_tile` durante `script_lock`.
-- [tests/test_strategist.py](../tests/test_strategist.py): decodificação TBL do `RamAdvisor`, `YES/NO` contextual (incluindo Mart), *VisionEngine*, schema JSON Ollama, guardrails 3B, anti-border-bounce, Rotas 22–25, guaritas da Viridian Forest `(15, 0)/(15, 2)` e Lab vazio (`0x02B`).
+- [tests/test_progress.py](../tests/test_progress.py): *Frontier Bias 50/30/20*, *Genesis Anchor*, monotonicidade de flags, `visited_grid`, piso estacionário, fadiga de batalhas, teto de nível, cura anti-farming (incluindo revival de Pokémon desmaiado e party com vários feridos) e imunidade de `steps_on_cur_tile` durante `script_lock`.
+- [tests/test_strategist.py](../tests/test_strategist.py): decodificação TBL do `RamAdvisor`, `YES/NO` contextual (incluindo Mart e Nurse Joy com `has_fainted`), *VisionEngine*, schema JSON Ollama, guardrails 3B, anti-border-bounce, roteamento dinâmico de cura ao Centro Pokémon, prontidão por nível individual para Rival Gary/Brock, Rotas 22–25, guaritas da Viridian Forest `(15, 0)/(15, 2)` e Lab vazio (`0x02B`).
 - [tests/test_surgery.py](../tests/test_surgery.py): preservação exata de saídas e expansão zero-padded da LSTM (`366 → 447 → 459`).
 - [tests/test_mlflow_tracking.py](../tests/test_mlflow_tracking.py): criação de metadados, promoção de `@champion`, `close_orphan_runs`, fluxo de `scripts/train.py` e consolidação dos paths sob `CFG.base_save_dir`.
 
@@ -95,7 +95,7 @@ A cada 5 iterações (`~200k` steps) ou na parada limpa, o modelo zip e o `_vecn
 | **`progress/`** | `score`, `best_milestone`, `party_level`, `total_tiles_ever`, `total_maps_ever`, `frontier_ratio`, `genesis_ratio`, `start_state_ratio` | Progresso global e saúde da distribuição de amostragem do currículo. |
 | **`trend/`** | `reward_mean20`, `tiles_mean20`, `maps_mean20`, `win_rate_mean20`, `combat_net_mean20`, `expl_net_mean20`, `stuck_ratio_mean20` | Médias móveis dos últimos 20 episódios para detectar platôs ou regressões. |
 | **`health/` & `train/`** | `health/ev_ma10`, `health/policy_entropy`, `train/approx_kl`, `train/clip_fraction`, `train/explained_variance`, `train/learning_rate` | Estabilidade da otimização PPO (`approx_kl` alvo ~`0.015–0.025`, `ev_ma10` alto, entropia não colapsada). |
-| **`battle/` & `reward/`** | `battle/win_rate`, `battle/kill_efficiency`, `battle/whiteouts`, `reward/from_explore`, `reward/from_victory`, `reward/from_strategist` | Diagnóstico fino entre ganho de exploração vs fobia/eficiência em combate. |
+| **`battle/` & `reward/`** | `battle/win_rate`, `battle/kill_efficiency`, `battle/whiteouts`, `reward/from_explore`, `reward/from_victory`, `reward/from_heal`, `reward/from_tactical`, `reward/from_strategist` | Diagnóstico fino entre ganho de exploração vs fobia/eficiência em combate e uso de cura/táticas. |
 
 ---
 

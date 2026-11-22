@@ -133,8 +133,8 @@ class Config:
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
     max_op_level_reward_scale: float = 0.2
-    heal_reward_scale:         float = 50.0
-    heal_min_prior_hp_ratio:   float = 0.40
+    heal_reward_scale:         float = 80.0
+    heal_min_prior_hp_ratio:   float = 0.65
     # Quando o agente esgotar os tiles do mapa, ele ganha uma punição de tempo leve
     max_explore_reward_per_map: float = 150.0
     stale_map_penalty:          float = 0.0

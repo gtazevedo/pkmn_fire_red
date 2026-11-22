@@ -14,8 +14,8 @@ Todas as parcelas são acumuladas em `RewardAccumulator` para auditoria no MLflo
 | :--- | :--- | :--- |
 | **Tile novo** (`explore`) | `explore_weight = 1.0` (`+0.5` se `map_bank == 3`) × `novelty_factor` | `novelty_factor = 0.50 + 0.50 / (1 + log1p(min(n_persistent, 50)))`. O piso estacionário `0.50` evita que mapas iniciais zerem completamente o gradiente após milhares de episódios; limitado por mapa: `35.0` no interior (`bank >= 4`) e `600.0` no exterior (`bank == 3`), equilibrando exploração vs combate. |
 | **Novo mapa** (`map_disc`) | `new_map_bonus = 5.0` (interior) / `15.0` (rotas `bank == 3`) | Pago 1× globalmente por política (`all_maps_visited`) e somente após `stats.steps >= 2` (evita bônus espúrio ao nascer na porta). Zera bounds direcionais na transição. |
-| **Bússola direcional** (`milestone`) | `north_bonus_per_tile = 1.0` / tile novo no eixo | Segue `strategist.current_goal.navigation_hint` (`north` diminui `y_min`, `south` aumenta `y_max`, `east` aumenta `x_max`, `west` diminui `x_min`). |
-| **Alinhamento Estratégico** (`strategist`) | `strategist_goal_bonus = 15.0` | Exige alcançar `(target_map_bank, target_map_id)` diferente do mapa de emissão, **não** estar em `_visited_maps_ep` (bloqueia oscilar na borda de dois mapas) e não estar em entrada de Lab vazio (`0x02B` ativa). |
+| **Bússola direcional** (`milestone`) | `north_bonus_per_tile = 1.0` / tile novo no eixo | Segue estritamente `strategist.current_goal.navigation_hint` (`north`, `south`, `east`, `west`), zerando bounds quando `navigation_hint` muda; `"interact"`/`"none"` não recompensam direção. |
+| **Alinhamento Estratégico** (`strategist`) | `strategist_goal_bonus = 15.0` | Exige alcançar `(target_map_bank, target_map_id)` diferente do mapa de emissão, **não** estar em `_visited_maps_ep` (ou ser entrada genuína de cura no Centro Pokémon/Casa rearmada após recuperação `HP >= 90%`) e não estar em Lab vazio (`0x02B` ativa). |
 
 ### Progresso na História e Marcos
 
@@ -39,7 +39,7 @@ Todas as parcelas são acumuladas em `RewardAccumulator` para auditoria no MLflo
 | **Fadiga de Batalhas** (`fatigue`) | Normal: `1.0 → 0.5 → 0.25 → 0.10`; rota com `party_level < 14` e `badges == 0`: `1.0 (n≤4) → 0.6 (n≤6) → 0.3` (com Parcel em rota: `0.5 → 0.2 → 0.05`) | Incentiva grind até nível suficiente antes do Rival/Brock sem incentivar grind infinito após atingir nível alto. |
 | **Level Up** (`levelup`) | `levelup_weight = 60.0` por nível até `level_cap` (`0.5x` se `in_battle and has_parcel`) | `level_cap = 24 + 12 * badges` (sobre a soma de níveis da party), permitindo capturar novos Pokémon e evoluir acima do nível 12 antes de enfrentar Brock. |
 | **Adversário Máximo** (`op_lvl`) | `max_op_level_reward_scale = 0.2` × `max_enemy_lvl_ever` | Incentiva enfrentar treinadores e áreas mais fortes. |
-| **Cura no Centro Pokémon** (`heal`) | `heal_pct * heal_reward_scale` (`50.0`) | **Anti-farming estrito:** só paga se `last_party_hp / max_hp < 0.40` (`heal_min_prior_hp_ratio`), ganho `>= max(3, int(0.15 * max_hp))` e tamanho da party inalterado. |
+| **Cura no Centro Pokémon** (`heal`) | `heal_pct * heal_reward_scale` (`80.0`) | **Anti-farming estrito:** paga se `last_party_hp / max_hp < 0.65` (`heal_min_prior_hp_ratio`) **ou** ao reviver Pokémon desmaiado (`cur_fainted < last_fainted_count`), exigindo ganho `>= max(3, int(0.15 * max_hp))` e tamanho da party inalterado. |
 | **Whiteout & Grama Crítica** (`stuck` / `idle_pen`) | `whiteout_penalty = -30.0` (`terminate_on_whiteout = True`), `low_hp_battle_penalty = -15.0` | Penalidade de whiteout supera `First Strike`; `low_hp_battle_penalty` aplica em grama selvagem (`bank == 3`) entrando com `< 35%` HP e `0` Poções (`wild_grind_penalty = 0.0`). |
 
 ---
