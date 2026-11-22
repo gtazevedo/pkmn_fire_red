@@ -71,7 +71,7 @@ PYTHONPATH=. .venv/bin/python -m scripts.summary
 - Experimento principal no MLflow UI: `http://127.0.0.1:5000/#/experiments/1`
 - Model Registry (`PokemonFireRed-RecurrentPPO`): `http://127.0.0.1:5000/#/models/PokemonFireRed-RecurrentPPO`
 
-### Rodar a Suíte de Testes Unitários (`56` testes)
+### Rodar a Suíte de Testes Unitários (`57` testes)
 ```bash
 PYTHONPATH=. .venv/bin/pytest -v
 # ou: make test

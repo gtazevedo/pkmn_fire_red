@@ -145,11 +145,52 @@ class Strategist:
         self.goal_alignments: int = 0
         self.total_alignment_bonus: float = 0.0
         self._ollama_cooldown_until: float = 0.0
+        self._tactical_signal: float = 0.0
+        self._last_battle_phase: str = ""
 
     @property
     def current_goal(self) -> StrategicGoal:
         with self._lock:
             return self._current_goal
+
+    def get_tactical_signal(self) -> float:
+        with self._lock:
+            return float(self._tactical_signal)
+
+    @staticmethod
+    def _classify_tactical_phase(context: dict) -> tuple[str, float]:
+        if context.get("in_battle", False):
+            potions = int(context.get("potions", 0))
+            active_hp_pct = float(context.get("active_hp_pct", 1.0))
+            party_hp_pct = float(context.get("party_hp_pct", 1.0))
+            if context.get("active_fainted", False) and context.get("has_alive_backup", False):
+                return "switch", 1.0
+            if potions > 0 and 0.0 < active_hp_pct < 0.50:
+                return "potion", 1.0
+            if context.get("can_capture", False):
+                return "capture", 1.0
+            if (
+                context.get("is_wild", False)
+                and potions == 0
+                and 0.0 < active_hp_pct < 0.35
+                and party_hp_pct < 0.35
+            ):
+                return "flee", 0.5
+            return "fight", 0.0
+
+        bank = int(context.get("map_bank", 0))
+        mid = int(context.get("map_id", 0))
+        potions = int(context.get("potions", 0))
+        balls = int(context.get("pokeballs", 0))
+        money = int(context.get("money", 0))
+        if (
+            (bank, mid) in ((5, 3), (6, 0))
+            and not context.get("has_oaks_parcel", False)
+            and context.get("has_pokedex", False)
+            and ((potions < 2 and money >= 300) or (balls < 3 and money >= 200))
+        ):
+            return "mart_buy", 1.0
+        return "overworld", 0.0
 
     def should_trigger(
         self,
@@ -191,6 +232,25 @@ class Strategist:
         money = RamReader.get_money(ram_array) if ram_array is not None else 0
         tms = RamReader.get_tms_count(ram_array) if ram_array is not None else 0
 
+        if in_battle and ram_array is not None:
+            p_mon = RamReader.get_battle_mon(ram_array, 0)
+            active_hp = p_mon["hp"] if p_mon["max_hp"] > 0 else party_hp
+            active_max_hp = p_mon["max_hp"] if p_mon["max_hp"] > 0 else max(party_max_hp, 1)
+            active_hp_pct = round(active_hp / float(max(active_max_hp, 1)), 3)
+            active_fainted = bool(p_mon["max_hp"] > 0 and p_mon["hp"] == 0)
+            has_alive_backup = bool(RamReader.get_best_alive_switch_slot(ram_array) > 0)
+            is_wild = not RamReader.is_trainer_battle(ram_array)
+            battle_obs = RamReader.get_battle_observation(ram_array, info)
+            can_capture = bool(battle_obs[11] > 0.5)
+            enemy_hp_pct = round(float(battle_obs[10]), 3)
+        else:
+            active_hp_pct = round(party_hp_pct, 3)
+            active_fainted = False
+            has_alive_backup = bool(RamReader.get_best_alive_switch_slot(ram_array) > 0) if ram_array is not None else False
+            is_wild = False
+            can_capture = False
+            enemy_hp_pct = 0.0
+
         last_dialogue = self._advisor.last_decoded_text.strip() if self._advisor else ""
         recent_dialogues = list(self._advisor.recent_dialogues) if self._advisor else []
 
@@ -203,6 +263,12 @@ class Strategist:
             "party_hp": party_hp,
             "party_max_hp": party_max_hp,
             "party_hp_pct": round(party_hp_pct, 3),
+            "active_hp_pct": active_hp_pct,
+            "active_fainted": active_fainted,
+            "has_alive_backup": has_alive_backup,
+            "is_wild": is_wild,
+            "can_capture": can_capture,
+            "enemy_hp_pct": enemy_hp_pct,
             "badges": badges,
             "event_flags": total_flags,
             "has_oaks_parcel": has_parcel,
@@ -235,10 +301,13 @@ class Strategist:
             else ""
         )
         return (
-            "You are a Pokemon FireRed strategic planner. Output one JSON object.\n"
+            "You are a Pokemon FireRed strategic & tactical planner. Output one JSON object.\n"
             "Rules:\n"
             "- sub_goal must be a concise English action phrase (never \"none\").\n"
-            "- priority: \"heal\" ONLY if hp_pct < 0.35; \"battle_gym\" only for Gym/Elite4; \"use_hm\" for HM obstacles; else \"explore\".\n"
+            "- priority: \"heal\" when active_fainted/low HP (<0.35), needing Potion, or fleeing wild battle at critical HP; "
+            "\"battle_gym\" only for Gym/Elite4; \"use_hm\" for HM obstacles; else \"explore\".\n"
+            "- Tactics: switch to alive backup on faint; use Potion when active_hp_pct < 0.50; throw Poke Ball if can_capture=True; "
+            "flee wild battle if active_hp_pct < 0.35 and potions == 0; buy Potions/Balls in Mart when low and money >= 300.\n"
             "- Keep target_map_bank and target_map_id aligned with Kanto maps or the baseline unless low HP or dialogue requires overriding.\n"
             "- Kanto maps (bank,id): Pallet=(3,0), RedHouse=(4,0), OakLab=(4,3), "
             "Route1=(3,19), Viridian=(3,1), ViridianMart=(5,3), ViridianCenter=(5,4), "
@@ -246,10 +315,12 @@ class Strategist:
             f"State: map_bank={context['map_bank']}, map_id={context['map_id']}, "
             f"pos=({context['player_x']},{context['player_y']}), "
             f"party_lvl={context['party_level']}, hp_pct={context['party_hp_pct']}, "
+            f"active_hp_pct={context.get('active_hp_pct', context['party_hp_pct'])}, "
             f"badges={context['badges']}, flags={context['event_flags']}, "
             f"has_oaks_parcel={context['has_oaks_parcel']}, has_pokedex={context.get('has_pokedex', False)}, "
-            f"potions={context['potions']}, "
-            f"in_battle={context['in_battle']}, steps_on_map={context['steps_on_map']}.\n"
+            f"potions={context['potions']}, pokeballs={context['pokeballs']}, money={context['money']}, "
+            f"in_battle={context['in_battle']}, is_wild={context.get('is_wild', False)}, "
+            f"can_capture={context.get('can_capture', False)}, steps_on_map={context['steps_on_map']}.\n"
             f"{suggestion_line}"
             f"RamAdvisor last_dialogue: \"{dialog_snippet}\" | recent: \"{recent}\"\n"
             "Return strict JSON matching the schema."
@@ -311,6 +382,39 @@ class Strategist:
         last_dialog = context.get("last_dialogue", "")
 
         if in_battle:
+            phase, _ = self._classify_tactical_phase(context)
+            if phase == "switch":
+                return StrategicGoal(
+                    sub_goal="Switch to next alive Pokemon",
+                    target_map_bank=bank,
+                    target_map_id=mid,
+                    priority="heal",
+                    navigation_hint="interact",
+                )
+            if phase == "potion":
+                return StrategicGoal(
+                    sub_goal="Use Potion to heal active Pokemon",
+                    target_map_bank=bank,
+                    target_map_id=mid,
+                    priority="heal",
+                    navigation_hint="interact",
+                )
+            if phase == "capture":
+                return StrategicGoal(
+                    sub_goal="Throw Poke Ball to capture new wild Pokemon",
+                    target_map_bank=bank,
+                    target_map_id=mid,
+                    priority="explore",
+                    navigation_hint="interact",
+                )
+            if phase == "flee":
+                return StrategicGoal(
+                    sub_goal="Flee wild battle at critical HP and heal",
+                    target_map_bank=bank,
+                    target_map_id=mid,
+                    priority="heal",
+                    navigation_hint="south",
+                )
             return StrategicGoal(
                 sub_goal="Win active Pokemon battle",
                 target_map_bank=bank,
@@ -723,8 +827,26 @@ class Strategist:
         parcel_changed = (
             self._last_has_parcel is not None and has_parcel_now != self._last_has_parcel
         )
-        if self.should_trigger(map_key, total_flags, in_battle) or parcel_changed:
-            context = self.build_context(info, ram_array, in_battle, total_flags)
+        need_context = (
+            self.should_trigger(map_key, total_flags, in_battle)
+            or parcel_changed
+            or in_battle
+            or map_key in ((5, 3), (6, 0))
+            or self._last_battle_phase not in ("", "overworld")
+        )
+        context = self.build_context(info, ram_array, in_battle, total_flags) if need_context else None
+        if context is not None:
+            phase_now, sig_now = self._classify_tactical_phase(context)
+        else:
+            phase_now, sig_now = "overworld", 0.0
+        phase_changed = (phase_now != self._last_battle_phase)
+
+        with self._lock:
+            self._tactical_signal = sig_now
+
+        if self.should_trigger(map_key, total_flags, in_battle) or parcel_changed or phase_changed:
+            if context is None:
+                context = self.build_context(info, ram_array, in_battle, total_flags)
             fallback = self._heuristic_goal(context)
             fallback.issued_on_map = map_key
             with self._lock:
@@ -736,7 +858,10 @@ class Strategist:
                 self._steps_on_current_map = 0
 
             battle_only_trigger = (
-                (self._last_in_battle is not None and in_battle != self._last_in_battle)
+                (
+                    (self._last_in_battle is not None and in_battle != self._last_in_battle)
+                    or (in_battle and phase_changed)
+                )
                 and (self._last_map_key == map_key)
                 and (total_flags <= self._last_flags)
                 and not parcel_changed
@@ -763,6 +888,7 @@ class Strategist:
         self._last_flags = total_flags
         self._last_in_battle = in_battle
         self._last_has_parcel = has_parcel_now
+        self._last_battle_phase = phase_now
         return alignment_bonus
 
     def get_goal_embedding(self) -> np.ndarray:
@@ -790,8 +916,13 @@ class Strategist:
                 goal = self._heuristic_goal(context)
                 goal.issued_on_map = map_key
                 self._current_goal = goal
+                phase0, sig0 = self._classify_tactical_phase(context)
+                self._last_battle_phase = phase0
+                self._tactical_signal = sig0
             else:
                 self._current_goal = StrategicGoal()
+                self._last_battle_phase = ""
+                self._tactical_signal = 0.0
 
     def stats_dict(self) -> dict:
         return {

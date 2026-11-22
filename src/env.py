@@ -97,6 +97,8 @@ class PokemonEnv(gym.Env):
         self._last_overworld_move_action: Optional[int] = None
         self._last_script_lock: bool = False
         self._last_cb2: int = 134571445
+        self._last_macro_info: Optional[dict] = None
+        self._last_macro_frame: Optional[np.ndarray] = None
         self._battle_switch_cooldown: int = 0
         self._smart_flee_rewarded_since_heal: bool = False
 
@@ -137,8 +139,6 @@ class PokemonEnv(gym.Env):
         p_max_hp = RamReader.party_max_hp(info)
         party_hp_pct = max(0.0, min(1.0, p_hp / float(p_max_hp))) if p_max_hp > 0 else 0.0
         potions = RamReader.get_potions_count(ram)
-        balls = RamReader.get_pokeballs_count(ram)
-        money = RamReader.get_money(ram)
         mk = (RamReader.map_bank(info), RamReader.map_id(info))
         battle_obs = RamReader.get_battle_observation(ram, info)
 
@@ -162,42 +162,8 @@ class PokemonEnv(gym.Env):
             float(RamReader.get_p1_status(ram)),
         ], dtype=np.float32)
 
-        cb2_obs = int(info.get("gMain_callback2", 0) or 0)
-        in_bat_obs = RamReader.is_in_battle(info) or (
-            getattr(self._stats, "was_in_battle", False) and cb2_obs != 134571445 and cb2_obs != 0
-        )
-        p_mon_obs = RamReader.get_battle_mon(ram, 0)
-        active_hp_obs = p_mon_obs["hp"] if p_mon_obs["max_hp"] > 0 else p_hp
-        active_max_obs = p_mon_obs["max_hp"] if p_mon_obs["max_hp"] > 0 else max(p_max_hp, 1)
-        active_hp_pct_obs = active_hp_obs / float(max(active_max_obs, 1))
-        need_switch_obs = in_bat_obs and p_mon_obs["max_hp"] > 0 and p_mon_obs["hp"] == 0 and p_hp > 0
-        can_potion_obs = (
-            in_bat_obs
-            and potions > 0
-            and 0 < active_hp_pct_obs < 0.50
-            and self._battle_potion_attempts < CFG.max_potion_macro_attempts_per_battle
-            and self._battle_potion_cooldown == 0
-        )
-        can_capture_obs = bool(battle_obs[11] > 0.5)
-        can_mart_obs = (
-            not in_bat_obs
-            and mk in ((5, 3), (6, 0))
-            and RamReader.has_pokedex(ram)
-            and not RamReader.has_oaks_parcel(ram)
-            and ((potions < 2 and money >= 300) or (balls < 3 and money >= 200))
-            and self._mart_buy_attempts < 2
-        )
-        is_trainer_obs = RamReader.is_trainer_battle(ram) if in_bat_obs else False
-        should_flee_obs = (
-            in_bat_obs
-            and (not is_trainer_obs)
-            and potions == 0
-            and 0 < active_hp_pct_obs < 0.35
-            and party_hp_pct < 0.35
-        )
-        tactical_signal = 1.0 if (need_switch_obs or can_potion_obs or can_capture_obs or can_mart_obs) else (0.5 if should_flee_obs else 0.0)
         text_ram = self._advisor.get_embedding().copy()
-        text_ram[4] = tactical_signal
+        text_ram[4] = self._strategist.get_tactical_signal()
 
         # [FIX 12] battle_idle_ratio
         idle_ratio = np.array([
@@ -291,10 +257,15 @@ class PokemonEnv(gym.Env):
             vec[self._MACRO_BTN_IDX[btn]] = 1
         noop = np.zeros(12, dtype=np.int8)
         info = {}
+        frame = None
         for _ in range(hold):
-            _, _, _, _, info = self.env.step(vec)
+            frame, _, _, _, info = self.env.step(vec)
         for _ in range(delay):
-            _, _, _, _, info = self.env.step(noop)
+            frame, _, _, _, info = self.env.step(noop)
+        if info:
+            self._last_macro_info = info
+        if frame is not None:
+            self._last_macro_frame = frame
         return info
 
     def _open_battle_bag(self) -> bool:
@@ -822,26 +793,12 @@ class PokemonEnv(gym.Env):
         if was_in_battle_pre and action_name != "TACTICAL_MACRO" and ram_pre is not None and not in_party_menu_pre:
             main_cur_pre, move_cur_pre = RamReader.get_battle_cursors(ram_pre)
             bt_pre = RamAdvisor.decode_ram_text(RamReader.get_battle_text_slice(ram_pre))
-            if is_trainer_pre:
-                block_run_pre = True
-            else:
-                block_run_pre = (
-                    pre_active_hp_pct >= 0.35
-                    and not RamReader.has_oaks_parcel(ram_pre)
-                    and pre_badges == 0
-                    and 0 < pre_lvl < 16
-                )
-            if block_run_pre and "what will" in bt_pre:
-                cursor_pen = (
-                    CFG.flee_trainer_cursor_penalty
-                    if is_trainer_pre
-                    else CFG.flee_wild_cursor_penalty
-                )
+            if is_trainer_pre and "what will" in bt_pre:
                 if (main_cur_pre == 1 and action_name == "DOWN") or (
                     main_cur_pre == 2 and action_name == "RIGHT"
                 ):
                     action = ActionSpace.NO_OP
-                    battle_guard_pen += cursor_pen
+                    battle_guard_pen += CFG.flee_trainer_cursor_penalty
                 elif main_cur_pre == 3 and action_name == "A":
                     action = ActionSpace.get(ActionSpace.NAMES.index("UP"))
                     battle_guard_pen += CFG.flee_trainer_penalty
@@ -898,27 +855,6 @@ class PokemonEnv(gym.Env):
             if getattr(self, "_battle_switch_cooldown", 0) > 0:
                 self._battle_switch_cooldown -= 1
             p_mon_now = RamReader.get_battle_mon(ram_array, 0)
-            if (
-                not _in_scripted_tutorial
-                and (0x08110000 <= _cb2 <= 0x0812FFFF)
-                and p_mon_now["max_hp"] > 0
-                and p_mon_now["hp"] == 0
-                and RamReader.party_hp(info) > 0
-                and getattr(self, "_battle_switch_cooldown", 0) == 0
-            ):
-                self._battle_switch_cooldown = 8
-                self._run_switch_pokemon_macro()
-                ram_array = self.env.get_ram()
-                RamReader.enrich_info_from_ram(info, ram_array)
-                _cb2 = int(info.get("gMain_callback2", 0) or 0)
-                self._last_cb2 = _cb2
-                _not_in_overworld = (_cb2 != 134571445)
-                _is_whiteout = (RamReader.party_hp(info) == 0 and RamReader.party_max_hp(info) > 0)
-                _in_battle_now = (
-                    RamReader.is_in_battle(info)
-                    or (_was_in_battle and _not_in_overworld and not _is_whiteout and _cb2 != 0)
-                )
-                p_mon_now = RamReader.get_battle_mon(ram_array, 0)
             e_mon_now = RamReader.get_battle_mon(ram_array, 1)
             _, best_slot_now, best_mult_now = score_moves(
                 (p_mon_now["type1"], p_mon_now["type2"]),
@@ -932,6 +868,8 @@ class PokemonEnv(gym.Env):
         # [FIX v22 / v30b / v32 / v32d] Tactical Macro Execution: troca forçada -> poção (HP ativo) -> captura -> Mart -> TM
         macro_reward = 0.0
         if action_name == "TACTICAL_MACRO":
+            self._last_macro_info = None
+            self._last_macro_frame = None
             potions = RamReader.get_potions_count(ram_array)
             balls = RamReader.get_pokeballs_count(ram_array)
             tms = RamReader.get_tms_count(ram_array)
@@ -1063,7 +1001,13 @@ class PokemonEnv(gym.Env):
                 # [FIX v23] Punição para queimar a mão do agente ao spammar o botão fora de hora
                 macro_reward += CFG.wasted_macro_penalty
 
-            # Atualiza estado pós-macro para que captura/término de batalha na macro reflitam neste step
+            # Atualiza estado pós-macro para que captura/troca/término de batalha na macro reflitam neste step
+            if self._last_macro_info:
+                info.update(self._last_macro_info)
+                RamReader.enrich_info_from_ram(info, ram_array)
+            if self._last_macro_frame is not None:
+                raw_frame = self._last_macro_frame
+                self._last_raw_frame = raw_frame
             _cb2 = int(info.get("gMain_callback2", 0) or 0)
             self._last_cb2 = _cb2
             _not_in_overworld = (_cb2 != 134571445)

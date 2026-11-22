@@ -693,6 +693,106 @@ def test_viridian_mart_restock_route22_underleveled_and_battle_guardrail(monkeyp
             }).encode("utf-8")
         ),
     )
-    strat.update({"map_bank": 3, "map_id": 41, "p1_lvl": 8, "p1_hp": 12, "p1_maxhp": 26}, ram, in_battle=True, total_flags=124)
+    strat.update({"map_bank": 3, "map_id": 41, "p1_lvl": 8, "p1_hp": 20, "p1_maxhp": 26}, ram, in_battle=True, total_flags=124)
     assert strat.current_goal.sub_goal == "Win active Pokemon battle"
+    strat.close()
+
+
+def test_strategist_battle_tactical_orientation_modes():
+    import struct
+    from src.battle_data import TYPE_GRASS, TYPE_NORMAL, TYPE_FLYING, TYPE_POISON
+    from src.reader import RamReader
+
+    enc32 = 0x11223344
+    ram = np.zeros(262144 + 0x6000, dtype=np.uint8)
+    sb1 = 0x025000
+    sb2 = 0x024000
+    struct.pack_into("<I", ram, 262144 + 0x5008, 0x02000000 | sb1)
+    struct.pack_into("<I", ram, 262144 + 0x500C, 0x02000000 | sb2)
+    struct.pack_into("<I", ram, sb2 + 0x0F20, enc32)
+    struct.pack_into("<I", ram, sb1 + 0x0290, 2000 ^ enc32)
+    ram[sb1 + 0x0FE5] = 0x02  # Pokedex ativa
+
+    # Party: slot 0 Bulbasaur (species=1, Lv7), slot 1 Rattata reserva (Lv3)
+    p0 = RamReader._PLAYER_PARTY_OFFSET
+    p1 = p0 + RamReader._MON_STRUCT_SIZE
+    pid, otid = 0, 0x12345678
+    k16 = (pid ^ otid) & 0xFFFF
+    struct.pack_into("<II", ram, p0, pid, otid)
+    struct.pack_into("<H", ram, p0 + 32, 1 ^ k16)
+    ram[p0 + 84] = 7
+    struct.pack_into("<HH", ram, p0 + 86, 20, 24)
+    struct.pack_into("<II", ram, p1, pid, otid)
+    struct.pack_into("<H", ram, p1 + 32, 19 ^ k16)
+    ram[p1 + 84] = 3
+    struct.pack_into("<HH", ram, p1 + 86, 14, 14)
+
+    # BattleMons: active Bulbasaur vs wild Pidgey (species=16)
+    b0 = RamReader._BATTLE_MONS_OFFSET
+    b1 = b0 + RamReader._BATTLE_MON_SIZE
+    struct.pack_into("<H", ram, b0 + 0x00, 1)
+    struct.pack_into("<4H", ram, b0 + 0x0C, 33, 45, 73, 0)
+    ram[b0 + 0x21], ram[b0 + 0x22] = TYPE_GRASS, TYPE_POISON
+    ram[b0 + 0x24 : b0 + 0x28] = [25, 40, 10, 0]
+    struct.pack_into("<H", ram, b0 + 0x28, 20)
+    struct.pack_into("<H", ram, b0 + 0x2C, 24)
+    struct.pack_into("<H", ram, b1 + 0x00, 16)
+    ram[b1 + 0x21], ram[b1 + 0x22] = TYPE_NORMAL, TYPE_FLYING
+    struct.pack_into("<H", ram, b1 + 0x28, 16)
+    struct.pack_into("<H", ram, b1 + 0x2C, 16)
+    struct.pack_into("<I", ram, RamReader._BATTLE_TYPE_FLAGS_OFFSET, 0x04)
+
+    strat = Strategist(advisor=RamAdvisor(), async_mode=False)
+    strat._ollama_cooldown_until = 1e18
+
+    # 1. Mart buy mode in Viridian Mart (5, 3) with 0 potions & money >= 300
+    strat.update({"map_bank": 5, "map_id": 3, "gMain_callback2": 0x080565B5, "p1_lvl": 7, "p1_hp": 20, "p1_maxhp": 24}, ram, False, 124)
+    assert np.isclose(strat.get_tactical_signal(), 1.0)
+    assert "Buy Potions" in strat.current_goal.sub_goal
+
+    # Give 2 Potions + 5 Poke Balls -> leaves mart_buy cleanly
+    struct.pack_into("<HH", ram, sb1 + 0x0310, 13, 2 ^ (enc32 & 0xFFFF))
+    struct.pack_into("<HH", ram, sb1 + 0x0430, 4, 5 ^ (enc32 & 0xFFFF))
+    strat.update({"map_bank": 3, "map_id": 19, "gMain_callback2": 0x080565B5, "p1_lvl": 7, "p1_hp": 20, "p1_maxhp": 24}, ram, False, 124)
+    assert np.isclose(strat.get_tactical_signal(), 0.0)
+
+    # 2. Healthy fight -> phase='fight', tactical_signal=0.0
+    info_bat = {"map_bank": 3, "map_id": 19, "gMain_callback2": 0x08011101, "p1_lvl": 7, "p1_hp": 20, "p1_maxhp": 24, "p2_lvl": 3, "p2_hp": 14, "p2_maxhp": 14}
+    strat.update(info_bat, ram, True, 124)
+    assert np.isclose(strat.get_tactical_signal(), 0.0)
+    assert strat.current_goal.sub_goal == "Win active Pokemon battle"
+
+    # 3. Capture new species (enemy_hp < 55%, Pidgey not owned) -> tactical_signal=1.0
+    struct.pack_into("<H", ram, b1 + 0x28, 6)
+    strat.update(info_bat, ram, True, 124)
+    assert np.isclose(strat.get_tactical_signal(), 1.0)
+    assert "Capture" in strat.current_goal.sub_goal or "Poke Ball" in strat.current_goal.sub_goal
+    struct.pack_into("<H", ram, b1 + 0x28, 16)
+
+    # 4. Active HP < 50% with Potions (even though party total > 45%) -> phase='potion', tactical_signal=1.0
+    struct.pack_into("<HH", ram, p0 + 86, 10, 24)
+    struct.pack_into("<H", ram, b0 + 0x28, 10)
+    info_bat_pot = {**info_bat, "p1_hp": 10}
+    strat.update(info_bat_pot, ram, True, 124)
+    assert np.isclose(strat.get_tactical_signal(), 1.0)
+    assert "Potion" in strat.current_goal.sub_goal
+
+    # 5. Active fainted (0/24) with alive backup -> phase='switch', tactical_signal=1.0
+    struct.pack_into("<HH", ram, p0 + 86, 0, 24)
+    struct.pack_into("<H", ram, b0 + 0x28, 0)
+    info_bat_sw = {**info_bat, "p1_hp": 0}
+    strat.update(info_bat_sw, ram, True, 124)
+    assert np.isclose(strat.get_tactical_signal(), 1.0)
+    assert "Switch" in strat.current_goal.sub_goal
+
+    # 6. Solo critical HP (<35%, 0 potions) -> phase='flee', tactical_signal=0.5
+    struct.pack_into("<HH", ram, p1 + 88, 0, 0)  # no backup
+    ram[p1 + 86 : p1 + 90] = [0, 0, 0, 0]
+    struct.pack_into("<HH", ram, sb1 + 0x0310, 0, 0)  # 0 potions
+    struct.pack_into("<HH", ram, p0 + 86, 6, 24)
+    struct.pack_into("<H", ram, b0 + 0x28, 6)
+    info_bat_flee = {"map_bank": 3, "map_id": 19, "gMain_callback2": 0x08011101, "p1_lvl": 7, "p1_hp": 6, "p1_maxhp": 24}
+    strat.update(info_bat_flee, ram, True, 124)
+    assert np.isclose(strat.get_tactical_signal(), 0.5)
+    assert strat.current_goal.priority == "heal" and "Flee" in strat.current_goal.sub_goal
     strat.close()

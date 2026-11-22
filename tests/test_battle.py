@@ -367,7 +367,7 @@ def test_wild_run_guard_status_spam_and_curriculum_recovery(tmp_path):
 
     env._run_action = fake_run_action
 
-    # 1. Wild battle com HP >= 35%: bloqueia BAG+DOWN (-1.5), PKMN+RIGHT (-1.5) e RUN+A (-5.0)
+    # 1. Wild battle com HP >= 35%: politica tem liberdade de movimento (sem trava hardcoded de RUN), enquanto curriculo recupera cursor
     what_will = _encode_tbl_bytes("what will sodiu do?")
     ram[RamReader._BATTLE_STRING_OFFSET : RamReader._BATTLE_STRING_OFFSET + len(what_will)] = what_will
 
@@ -377,22 +377,23 @@ def test_wild_run_guard_status_spam_and_curriculum_recovery(tmp_path):
     env.step(ActionSpace.NAMES.index("LEFT"))
     assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("LEFT")))
 
-    # BAG(1) + DOWN bloqueado -> NO_OP e -1.5
+    # Com win_rate >= 0.35 (D-pad liberado), movimentacao para RUN(3) em batalha selvagem NAO sofre bloqueio hardcoded em env.py
+    env._stats.global_battles_fought = 10
+    env._stats.global_victories = 4
+    ram[RamReader._ACTION_CURSOR_OFFSET] = 1
     _, rew_bd, _, _, _ = env.step(ActionSpace.NAMES.index("DOWN"))
-    assert np.all(captured_actions[-1] == ActionSpace.NO_OP)
-    assert np.isclose(rew_bd, CFG.time_penalty + CFG.flee_wild_cursor_penalty)
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("DOWN")))
+    assert rew_bd >= 0.0
 
-    # PKMN(2) + RIGHT bloqueado -> NO_OP e -1.5
     ram[RamReader._ACTION_CURSOR_OFFSET] = 2
     _, rew_pr, _, _, _ = env.step(ActionSpace.NAMES.index("RIGHT"))
-    assert np.all(captured_actions[-1] == ActionSpace.NO_OP)
-    assert np.isclose(rew_pr, CFG.time_penalty + CFG.flee_wild_cursor_penalty)
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("RIGHT")))
+    assert rew_pr >= 0.0
 
-    # RUN(3) + A bloqueado -> UP e -5.0
     ram[RamReader._ACTION_CURSOR_OFFSET] = 3
     _, rew_ra, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
-    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("UP")))
-    assert np.isclose(rew_ra, CFG.time_penalty + CFG.flee_trainer_penalty)
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("A")))
+    assert rew_ra >= 0.0
 
     # 2. Submenu de golpes ("typenormal"): A em Growl (slot 1, score<=0.05) paga -1.5; em Tackle (slot 0) paga 0.0
     type_str = _encode_tbl_bytes("typenormal")
@@ -406,7 +407,7 @@ def test_wild_run_guard_status_spam_and_curriculum_recovery(tmp_path):
     _, rew_tackle, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
     assert rew_tackle >= 0.0
 
-    # 3. Com HP baixo (<35%, 6/24 = 25%), RUN(3) + A eh permitido livremente
+    # 3. Com HP baixo (<35%, 6/24 = 25%), RUN(3) + A continua permitido
     struct.pack_into("<HH", ram, RamReader._PLAYER_PARTY_OFFSET + 86, 6, 24)
     struct.pack_into("<H", ram, b0 + 0x28, 6)
     ram[RamReader._BATTLE_STRING_OFFSET : RamReader._BATTLE_STRING_OFFSET + len(what_will)] = what_will
@@ -444,7 +445,7 @@ def test_forced_switch_slot_selection_low_hp_curriculum_unlock_and_tactical_obs(
     assert len(slots) == 3 and slots[0]["hp"] == 0
     assert RamReader.get_best_alive_switch_slot(ram) == 2
 
-    # 2. Wild battle em HP baixo (<35%, 6/24 = 25%, 0 pocoes), enemy full HP -> curriculum destranca D-pad, obs mostra 0.25 & tactical=0.5
+    # 2. Wild battle em HP baixo (<35%, 6/24 = 25%, 0 pocoes), enemy full HP -> curriculum destranca D-pad, obs mostra 0.25 & tactical=0.5 vindo do Strategist
     ram2 = _make_full_ram()
     struct.pack_into("<iiI", ram2, 262144 + 0x5040, 24, 24, 0x02031000)
     struct.pack_into("<hh", ram2, sb1, 12, 35)
@@ -542,20 +543,20 @@ def test_forced_switch_slot_selection_low_hp_curriculum_unlock_and_tactical_obs(
     env.step(ActionSpace.NAMES.index("DOWN"))
     assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("DOWN")))
 
-    # D-pad em batalha selvagem com HP baixo (<35%, 0 pocoes) NAO é travado -> RIGHT chega em BAG/RUN
+    # D-pad em batalha selvagem com HP baixo (<35%, 0 pocoes) NAO é travado -> RIGHT chega em BAG/RUN e Strategist sinaliza 0.5
     env._last_cb2 = 0x08011101
     cb2_state["val"] = 0x08011101
     obs_low, _, _, _, _ = env.step(ActionSpace.NAMES.index("RIGHT"))
     assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("RIGHT")))
     assert np.isclose(obs_low["ram"][8], 6.0 / 24.0)
-    assert np.isclose(obs_low["ram"][19], 0.5)  # tactical emergency flee
+    assert np.isclose(obs_low["ram"][19], 0.5)
 
-    # Pocao disponivel com HP ativo <50% ativa obs['ram'][19] = 1.0
+    # Pocao disponivel com HP ativo <50% faz Strategist sinalizar obs['ram'][19] = 1.0
     enc32 = 0x4B55982C
     struct.pack_into("<HH", ram2, sb1 + 0x0310, 13, 1 ^ (enc32 & 0xFFFF))
-    obs_pot = env._build_obs(np.zeros((160, 240, 3), dtype=np.uint8), {
-        "map_bank": 3, "map_id": 19, "gMain_callback2": 0x08011101, "p1_lvl": 7, "p1_hp": 6, "p1_maxhp": 24,
-    })
+    bat_info_pot = {"map_bank": 3, "map_id": 19, "gMain_callback2": 0x08011101, "p1_lvl": 7, "p1_hp": 6, "p1_maxhp": 24}
+    env._strategist.update(bat_info_pot, ram2, True, 0)
+    obs_pot = env._build_obs(np.zeros((160, 240, 3), dtype=np.uint8), bat_info_pot)
     assert np.isclose(obs_pot["ram"][19], 1.0)
     struct.pack_into("<HH", ram2, sb1 + 0x0310, 0, 0)  # remove pocao para testar smart_flee
 

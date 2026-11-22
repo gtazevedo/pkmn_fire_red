@@ -195,15 +195,15 @@ class Config:
     # First Strike reforçado e sujeito à fadiga suave por mapa
     first_strike_bonus:       float = 10.0
 
-    # [FIX v19 / v31 / v32c] Dynamic Battle Curriculum: reativado até global_win_rate >= 55%
+    # [FIX v19 / v31 / v32e] Dynamic Battle Curriculum: libera D-pad quando win_rate >= 35%
     enable_battle_curriculum:             bool  = True
-    curriculum_win_rate_threshold:        float = 0.55
+    curriculum_win_rate_threshold:        float = 0.35
     max_potion_macro_attempts_per_battle: int   = 2
     potion_macro_cooldown_steps:          int   = 12
     max_tm_macro_attempts_per_episode:    int   = 2
     wasted_macro_penalty:                 float = -0.25
 
-    # [FIX v32 / v32c / v32d] Captura, Poké Mart, troca forçada, fuga tática e anti-status spam
+    # [FIX v32 / v32e] Captura, Poké Mart, troca forçada, fuga tática e anti-status spam
     capture_new_species_bonus:            float = 120.0
     pokeball_throw_bonus:                 float = 15.0
     max_capture_macro_attempts_per_battle: int  = 2
@@ -211,7 +211,6 @@ class Config:
     super_effective_bonus:                float = 3.0
     flee_trainer_penalty:                 float = -5.0
     flee_trainer_cursor_penalty:          float = -1.0
-    flee_wild_cursor_penalty:             float = -1.5
     status_move_spam_penalty:             float = -1.5
     unnecessary_flee_penalty:             float = -25.0
     smart_flee_bonus:                     float = 15.0
