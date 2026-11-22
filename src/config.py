@@ -133,7 +133,7 @@ class Config:
 
     # [FIX v18.3] Novas recompensas inspiradas em Peter Whiddy
     max_op_level_reward_scale: float = 0.2
-    heal_reward_scale:         float = 25.0
+    heal_reward_scale:         float = 50.0
     heal_min_prior_hp_ratio:   float = 0.40
     # Quando o agente esgotar os tiles do mapa, ele ganha uma punição de tempo leve
     max_explore_reward_per_map: float = 150.0
@@ -174,12 +174,12 @@ class Config:
     battle_b_penalty:     float = 0.0
     battle_b_threshold:   int   = 999  # Disable b penalty
     
-    # [FIX v31] Whiteout moderado (sem fobia de combate) + zero punição em encontro selvagem
-    whiteout_penalty:          float = -10.0
+    # [FIX v31 / v32d] Whiteout reforçado (-30) e guarda anti-entrada suicida em grama (<35% HP e 0 Poções)
+    whiteout_penalty:          float = -30.0
     whiteout_idle_multiplier:  float = 0.0
     terminate_on_whiteout:     bool  = True
     wild_grind_penalty:        float = 0.0
-    low_hp_battle_penalty:     float = 0.0
+    low_hp_battle_penalty:     float = -15.0
 
     # [FIX v12-B / v13-A] Anti-farming: threshold RANDOMIZADO por episódio
     # v12 usava 0.60 fixo → agente calibrou farming em exatamente 0.60.
@@ -203,17 +203,19 @@ class Config:
     max_tm_macro_attempts_per_episode:    int   = 2
     wasted_macro_penalty:                 float = -0.25
 
-    # [FIX v32 / v32c] Captura, Poké Mart, efetividade de tipos e anti-fuga / anti-status spam
+    # [FIX v32 / v32c / v32d] Captura, Poké Mart, troca forçada, fuga tática e anti-status spam
     capture_new_species_bonus:            float = 120.0
     pokeball_throw_bonus:                 float = 15.0
     max_capture_macro_attempts_per_battle: int  = 2
-    mart_buy_bonus:                       float = 40.0
+    mart_buy_bonus:                       float = 80.0
     super_effective_bonus:                float = 3.0
     flee_trainer_penalty:                 float = -5.0
     flee_trainer_cursor_penalty:          float = -1.0
     flee_wild_cursor_penalty:             float = -1.5
     status_move_spam_penalty:             float = -1.5
     unnecessary_flee_penalty:             float = -25.0
+    smart_flee_bonus:                     float = 15.0
+    forced_switch_bonus:                  float = 10.0
 
     # [FIX v13-B] entry_bonus_revisit: 2.0 → 0.0 (zero não dá incentivo)
     entry_bonus_revisit:       float = 0.0    # era 2.0

@@ -69,7 +69,7 @@ pkmn_fire_red/
 │   ├── summary.py                  # Resumo CLI de experimentos e versões no Model Registry
 │   ├── tune.py                     # Script auxiliar de sweep (Makefile target `tune`)
 │   └── tune_gen6.py                # Script auxiliar de sweep Gen6
-├── tests/                          # Suíte automatizada (pytest: 55 testes unitários)
+├── tests/                          # Suíte automatizada (pytest: 56 testes unitários)
 │   ├── test_battle.py
 │   ├── test_reader.py
 │   ├── test_progress.py

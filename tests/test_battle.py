@@ -235,6 +235,9 @@ def test_trainer_run_blocked_with_script_lock_and_cut_dialogue_zero_bonus(tmp_pa
     env._steps_in_current_map = 5
     env._last_overworld_move_action = None
     env._last_script_lock = True
+    env._last_cb2 = 0x08011101
+    env._battle_switch_cooldown = 0
+    env._smart_flee_rewarded_since_heal = False
 
     def fake_run_action(act):
         captured_actions.append(np.array(act, copy=True))
@@ -350,6 +353,9 @@ def test_wild_run_guard_status_spam_and_curriculum_recovery(tmp_path):
     env._steps_in_current_map = 5
     env._last_overworld_move_action = None
     env._last_script_lock = False
+    env._last_cb2 = 0x08011101
+    env._battle_switch_cooldown = 0
+    env._smart_flee_rewarded_since_heal = False
 
     def fake_run_action(act):
         captured_actions.append(np.array(act, copy=True))
@@ -402,8 +408,169 @@ def test_wild_run_guard_status_spam_and_curriculum_recovery(tmp_path):
 
     # 3. Com HP baixo (<35%, 6/24 = 25%), RUN(3) + A eh permitido livremente
     struct.pack_into("<HH", ram, RamReader._PLAYER_PARTY_OFFSET + 86, 6, 24)
+    struct.pack_into("<H", ram, b0 + 0x28, 6)
     ram[RamReader._BATTLE_STRING_OFFSET : RamReader._BATTLE_STRING_OFFSET + len(what_will)] = what_will
     ram[RamReader._ACTION_CURSOR_OFFSET] = 3
     _, rew_low_hp_run, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
     assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("A")))
     assert rew_low_hp_run == 0.0
+
+
+def test_forced_switch_slot_selection_low_hp_curriculum_unlock_and_tactical_obs(tmp_path):
+    from src.advisor import RamAdvisor
+    from src.config import CFG, ActionSpace
+    from src.env import PokemonEnv
+    from src.progress import EpisodeStats, ProgressManager, RewardAccumulator
+    from src.strategist import Strategist
+    from src.vision import VisionEngine
+
+    ram = _make_full_ram()
+    sb1 = 0x025560
+    struct.pack_into("<iiI", ram, 262144 + 0x5040, 24, 24, 0x02031000)
+    struct.pack_into("<hh", ram, sb1, 12, 35)
+
+    # 1. Party com slot 0 desmaiado (0/24 Lv7), slot 1 vivo (10/14 Lv3), slot 2 vivo (18/20 Lv5) -> escolhe slot 2
+    p0 = RamReader._PLAYER_PARTY_OFFSET
+    p1 = p0 + RamReader._MON_STRUCT_SIZE
+    p2 = p0 + 2 * RamReader._MON_STRUCT_SIZE
+    ram[p0 + 84] = 7
+    struct.pack_into("<HH", ram, p0 + 86, 0, 24)
+    ram[p1 + 84] = 3
+    struct.pack_into("<HH", ram, p1 + 86, 10, 14)
+    ram[p2 + 84] = 5
+    struct.pack_into("<HH", ram, p2 + 86, 18, 20)
+
+    slots = RamReader.get_party_slots(ram)
+    assert len(slots) == 3 and slots[0]["hp"] == 0
+    assert RamReader.get_best_alive_switch_slot(ram) == 2
+
+    # 2. Wild battle em HP baixo (<35%, 6/24 = 25%, 0 pocoes), enemy full HP -> curriculum destranca D-pad, obs mostra 0.25 & tactical=0.5
+    ram2 = _make_full_ram()
+    struct.pack_into("<iiI", ram2, 262144 + 0x5040, 24, 24, 0x02031000)
+    struct.pack_into("<hh", ram2, sb1, 12, 35)
+    struct.pack_into("<I", ram2, RamReader._BATTLE_TYPE_FLAGS_OFFSET, 0x04)
+    ram2[RamReader._PLAYER_PARTY_OFFSET + 84] = 7
+    struct.pack_into("<HH", ram2, RamReader._PLAYER_PARTY_OFFSET + 86, 6, 24)
+    ram2[RamReader._ENEMY_PARTY_OFFSET + 84] = 3
+    struct.pack_into("<HH", ram2, RamReader._ENEMY_PARTY_OFFSET + 86, 16, 16)
+
+    b0 = RamReader._BATTLE_MONS_OFFSET
+    b1 = b0 + RamReader._BATTLE_MON_SIZE
+    struct.pack_into("<H", ram2, b0 + 0x00, 1)
+    struct.pack_into("<4H", ram2, b0 + 0x0C, 33, 45, 73, 0)
+    ram2[b0 + 0x21], ram2[b0 + 0x22] = TYPE_GRASS, 3
+    ram2[b0 + 0x24 : b0 + 0x28] = bytes([25, 40, 10, 0])
+    struct.pack_into("<H", ram2, b0 + 0x28, 6)
+    struct.pack_into("<H", ram2, b0 + 0x2C, 24)
+    struct.pack_into("<H", ram2, b1 + 0x00, 16)
+    ram2[b1 + 0x21], ram2[b1 + 0x22] = TYPE_NORMAL, TYPE_FLYING
+    struct.pack_into("<H", ram2, b1 + 0x28, 16)
+    struct.pack_into("<H", ram2, b1 + 0x2C, 16)
+
+    captured_actions = []
+    cb2_state = {"val": 0x08011101}
+
+    class StubRetroEnv:
+        def get_ram(self):
+            return ram2
+
+    env = PokemonEnv.__new__(PokemonEnv)
+    env.env_id = 0
+    env._fixed_state_file = None
+    env._enable_stochasticity = False
+    env.env = StubRetroEnv()
+    env._total_steps_ref = [3_000_000]
+    env._cached_total_steps = 3_000_000
+    env._stats = EpisodeStats()
+    env._stats.reset({"p1_lvl": 7, "p1_hp": 6, "p1_maxhp": 24, "gMain_callback2": 0x08011101})
+    env._stats.was_in_battle = True
+    env._stats.last_enemy_hp = 16
+    env._stats.initial_enemy_hp = 16
+    env._stats.max_enemy_lvl_ever = 3
+    env._rewards = RewardAccumulator()
+    env._advisor = RamAdvisor()
+    env._strategist = Strategist(advisor=env._advisor, async_mode=False)
+    env._strategist._ollama_cooldown_until = 1e18
+    env._progress = ProgressManager(progress_dir=str(tmp_path), state_file="/tmp/Start.state.gz")
+    env._vision = VisionEngine()
+    env._episode_num = 1
+    env._farm_ratio_threshold = 0.90
+    env._map_history = []
+    env._last_map_transition_step = 0
+    env._explore_reward_per_map = {}
+    env._prev_map_key = (3, 19)
+    env._ever_left_interior = True
+    env._steps_interior_only = 0
+    env._battle_screenshot_saved = True
+    env._had_parcel_in_ep = False
+    env._had_teachy_tv_in_ep = False
+    env._battle_potion_attempts = 0
+    env._battle_potion_cooldown = 0
+    env._battle_capture_attempts = 0
+    env._battle_capture_cooldown = 0
+    env._episode_tm_attempts = 0
+    env._mart_buy_rewarded_in_ep = False
+    env._mart_buy_attempts = 0
+    env._owned_species_in_ep = {1}
+    env._prev_party_size_in_ep = 1
+    env._last_battle_best_slot = 0
+    env._last_battle_best_mult = 1.0
+    env._last_was_trainer_battle = False
+    env._battle_captured_this_battle = False
+    env._last_overworld_tile = ()
+    env._pending_event_save_flags = 0
+    env._steps_in_current_map = 5
+    env._last_overworld_move_action = None
+    env._last_script_lock = False
+    env._last_cb2 = 0x08011101
+    env._battle_switch_cooldown = 0
+    env._smart_flee_rewarded_since_heal = False
+
+    def fake_run_action(act):
+        captured_actions.append(np.array(act, copy=True))
+        p_hp = struct.unpack_from("<H", ram2, RamReader._PLAYER_PARTY_OFFSET + 86)[0]
+        return np.zeros((160, 240, 3), dtype=np.uint8), np.zeros((84, 84, 1), dtype=np.uint8), {
+            "map_bank": 3, "map_id": 19, "gMain_callback2": cb2_state["val"],
+            "p1_lvl": 7, "p1_hp": p_hp, "p1_maxhp": 24, "e1_lvl": 3, "e1_hp": 16, "e1_maxhp": 16,
+        }
+
+    env._run_action = fake_run_action
+
+    # D-pad em Party Menu (_last_cb2 == 0x0811EBA1) NAO é travado mesmo com global_win_rate = 0
+    env._last_cb2 = 0x0811EBA1
+    cb2_state["val"] = 0x0811EBA1
+    env.step(ActionSpace.NAMES.index("DOWN"))
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("DOWN")))
+
+    # D-pad em batalha selvagem com HP baixo (<35%, 0 pocoes) NAO é travado -> RIGHT chega em BAG/RUN
+    env._last_cb2 = 0x08011101
+    cb2_state["val"] = 0x08011101
+    obs_low, _, _, _, _ = env.step(ActionSpace.NAMES.index("RIGHT"))
+    assert np.all(captured_actions[-1] == ActionSpace.get(ActionSpace.NAMES.index("RIGHT")))
+    assert np.isclose(obs_low["ram"][8], 6.0 / 24.0)
+    assert np.isclose(obs_low["ram"][19], 0.5)  # tactical emergency flee
+
+    # Pocao disponivel com HP ativo <50% ativa obs['ram'][19] = 1.0
+    enc32 = 0x4B55982C
+    struct.pack_into("<HH", ram2, sb1 + 0x0310, 13, 1 ^ (enc32 & 0xFFFF))
+    obs_pot = env._build_obs(np.zeros((160, 240, 3), dtype=np.uint8), {
+        "map_bank": 3, "map_id": 19, "gMain_callback2": 0x08011101, "p1_lvl": 7, "p1_hp": 6, "p1_maxhp": 24,
+    })
+    assert np.isclose(obs_pot["ram"][19], 1.0)
+    struct.pack_into("<HH", ram2, sb1 + 0x0310, 0, 0)  # remove pocao para testar smart_flee
+
+    # Smart flee bonus (+15.0) paga 1x ate curar >= 50%; 2a fuga em HP baixo paga 0.0
+    heal_before = env._rewards.heal
+    cb2_state["val"] = 134571445
+    env.step(ActionSpace.NAMES.index("A"))
+    assert np.isclose(env._rewards.heal - heal_before, CFG.smart_flee_bonus)
+    assert env._smart_flee_rewarded_since_heal is True
+
+    # Volta para batalha ainda sem curar >= 50% e foge novamente -> smart_flee_bonus = 0.0
+    heal_mid = env._rewards.heal
+    env._stats.was_in_battle = True
+    env._stats.last_enemy_hp = 16
+    cb2_state["val"] = 134571445
+    _, r_flee2, _, _, _ = env.step(ActionSpace.NAMES.index("A"))
+    assert np.isclose(env._rewards.heal, heal_mid)
+    assert np.isclose(r_flee2, 0.0)

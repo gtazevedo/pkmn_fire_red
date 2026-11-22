@@ -268,12 +268,12 @@ def test_anti_battle_junkie_fatigue_whiteout_and_level_cap(tmp_path):
     assert stats.update_level(10, env_id=0, badges=0, in_battle=True, has_parcel=True) == CFG.levelup_weight * 0.5
     stats.max_level = 9  # restaura baseline 9 para o teste de teto abaixo (12 - 9 = 3)
 
-    # Whiteout aplica penalidade moderada (-10.0) com terminate_on_whiteout=True e sem punicao em grama selvagem
+    # Whiteout aplica penalidade -30.0 com terminate_on_whiteout=True; entrada em grama <35% sem pocoes pune -15.0
     _, _, _, _, whiteout_pen, _ = stats.update_battle(True, 20, 0, False, None, 0, 1, (6, 2, 5, 5), 9)
-    assert whiteout_pen == CFG.whiteout_penalty == -10.0
+    assert whiteout_pen == CFG.whiteout_penalty == -30.0
     assert CFG.terminate_on_whiteout is True
     assert CFG.wild_grind_penalty == 0.0
-    assert CFG.low_hp_battle_penalty == 0.0
+    assert CFG.low_hp_battle_penalty == -15.0
 
     # Teto de nivel por insignia fora de batalha: lvl 24 paga, lvl 25 sem insignia paga 0, com 1 insignia volta a pagar
     stats.max_level = 21

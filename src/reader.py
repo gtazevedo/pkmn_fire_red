@@ -375,6 +375,33 @@ class RamReader:
         return species_list
 
     @classmethod
+    def get_party_slots(cls, ram_array) -> list[dict]:
+        """Lê slot, nível, HP e HP máximo de cada Pokémon presente em gPlayerParty."""
+        if ram_array is None or len(ram_array) < cls._PLAYER_PARTY_OFFSET + 6 * cls._MON_STRUCT_SIZE:
+            return []
+        slots: list[dict] = []
+        for i in range(6):
+            base = cls._PLAYER_PARTY_OFFSET + i * cls._MON_STRUCT_SIZE
+            maxhp = cls._read_u16(ram_array, base + 88)
+            if 0 < maxhp <= CFG.max_party_hp:
+                slots.append({
+                    "slot": i,
+                    "level": int(ram_array[base + 84]),
+                    "hp": cls._read_u16(ram_array, base + 86),
+                    "max_hp": maxhp,
+                })
+        return slots
+
+    @classmethod
+    def get_best_alive_switch_slot(cls, ram_array) -> int:
+        """Retorna índice 1..5 do melhor Pokémon reserva vivo para troca forçada, ou -1."""
+        candidates = [s for s in cls.get_party_slots(ram_array) if s["slot"] > 0 and s["hp"] > 0]
+        if not candidates:
+            return -1
+        best = max(candidates, key=lambda s: (s["level"], s["hp"], -s["slot"]))
+        return int(best["slot"])
+
+    @classmethod
     def is_trainer_battle(cls, ram_array) -> bool:
         """Retorna True quando gBattleTypeFlags (0x02022B4C) indica batalha contra treinador."""
         if ram_array is None or len(ram_array) <= cls._BATTLE_TYPE_FLAGS_OFFSET + 3:
